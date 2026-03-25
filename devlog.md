@@ -193,3 +193,35 @@ response = requests.post(f"http://localhost:5000/hold/{button_name}", json=data,
 **Note:** Tesseract OCR is NOT installed. Vision model (GPT-4o-mini) can read game text if needed, but memory reading is preferred.
 
 **Status:** ✅ Phase 3C FUNCTIONAL - AI can navigate field and win battles
+
+## Unified Agent & End-to-End Test (2026-03-25)
+
+**MAJOR MILESTONE:** AI plays through Narshe autonomously
+
+**New Architecture:** Replaced complex Director/Pilot with a simple state machine (`ff6_agent.py`):
+- FIELD: Walk in set direction, use stuck detection for dialog/obstacles
+- BATTLE_MENU: Press A (selects first command = MagiTek/Fight)
+- BATTLE_ANIMATING: Wait for animation
+- State detected from memory: position.x==0 = battle, battle_menu>0 = menu active
+
+**Test Results (3-minute run from save state 3):**
+- Started at Narshe gates (Map 19)
+- Won 5 battles against guards and mine enemies
+- Navigated through 3 maps: 19 (surface) -> 39 (mines entrance) -> 41 (deep mines)
+- Gold: 3000 -> 3654
+- Party leveled up multiple times:
+  - Terra: HP 63->77
+  - Wedge: HP 68->105 (max)
+  - Vicks: HP 70->107 (max)
+- Agent maintained correct direction (Up) throughout
+- Zero crashes, zero errors
+
+**Key Insight:** Simple state machine + memory reading >>> complex LLM orchestration for moment-to-moment gameplay. LLM should only be used for strategic decisions (where to go, what to equip), not for pressing buttons.
+
+**Files Added/Modified:**
+- `ff6_agent.py` - New unified game agent with state machine
+- `ff6_menu_ocr.py` - OCR module (available but not needed for core gameplay)
+- `app.py` - Added /agent/* endpoints
+- `Bizhawk/Lua/bizhawk_gamestate_server.lua` - Added battle state memory reads
+
+**Status:** ✅ AI can autonomously play through Narshe opening and mines

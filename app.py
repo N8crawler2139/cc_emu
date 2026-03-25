@@ -14,6 +14,7 @@ from screenshot_ocr import ScreenshotOCR
 from ff6_game_state import FF6GameStateReader
 from ff6_actions import FF6Actions
 from ai_expert import get_expert, reset_expert
+from ff6_agent import get_agent, reset_agent
 
 app = Flask(__name__)
 
@@ -841,6 +842,51 @@ def action_heal():
     actions.heal_party()
     return jsonify({'success': True, 'message': 'Heal party attempted'})
 
+# --- Unified Agent Endpoints ---
+
+@app.route('/agent/start', methods=['POST'])
+def agent_start():
+    """Start the unified game agent."""
+    global bizhawk_controller
+    if not bizhawk_controller or not bizhawk_controller.is_connected():
+        return jsonify({'success': False, 'message': 'Not connected to BizHawk'})
+    agent = get_agent(bizhawk_controller)
+    if agent.running:
+        return jsonify({'success': False, 'message': 'Agent already running'})
+    data = request.get_json() if request.is_json else {}
+    direction = data.get('direction', 'Up')
+    agent.walk_direction = direction
+    agent.start()
+    return jsonify({'success': True, 'message': f'Agent started (walking {direction})'})
+
+@app.route('/agent/stop', methods=['POST'])
+def agent_stop():
+    """Stop the unified game agent."""
+    agent = get_agent()
+    if agent and agent.running:
+        agent.stop()
+        return jsonify({'success': True, 'message': 'Agent stopped'})
+    return jsonify({'success': True, 'message': 'Agent not running'})
+
+@app.route('/agent/status', methods=['GET'])
+def agent_status():
+    """Get agent status."""
+    agent = get_agent()
+    if agent:
+        return jsonify({'success': True, **agent.get_status()})
+    return jsonify({'success': True, 'running': False, 'message': 'Agent not initialized'})
+
+@app.route('/agent/direction', methods=['POST'])
+def agent_direction():
+    """Set the agent's walk direction."""
+    agent = get_agent()
+    if not agent:
+        return jsonify({'success': False, 'message': 'Agent not initialized'})
+    data = request.get_json() or {}
+    direction = data.get('direction', 'Up')
+    agent.walk_direction = direction
+    return jsonify({'success': True, 'message': f'Direction set to {direction}'})
+
 # --- Expert AI Endpoints ---
 
 @app.route('/ai/start', methods=['POST'])
@@ -901,6 +947,7 @@ def cleanup():
     """Clean up all resources"""
     global bizhawk_controller, game_controller, screenshot_ocr, is_running, ff6_actions
     
+    reset_agent()
     reset_expert()
 
     if bizhawk_controller:

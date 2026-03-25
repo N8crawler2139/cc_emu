@@ -44,7 +44,9 @@ Transform the emulator controller into an AI-accessible system with visual feedb
 - [x] Flask API endpoints for game state queries
 - [x] High-level action system (walk, menu, equip, battle, save)
 
-## Phase 3B: Intelligent Menu Navigation (NEXT)
+## Phase 3B: Intelligent Menu Navigation (PARTIALLY DONE)
+- [x] Battle navigation via memory state (battle_menu flag + A-press)
+- [x] Unified agent state machine (field/dialog/battle/transition)
 - [ ] Read menu cursor position from memory for precise navigation
 - [ ] Fix party formation address for accurate party detection
 - [ ] Equip system that scrolls to exact item in equipment list

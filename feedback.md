@@ -1,9 +1,12 @@
-### Current Priority (2026-03-25)
-- Expand Lua memory reading: enemy HP, active character turn, cursor position in submenus
-- Wire full AI loop: field walk -> dialog advance -> battle -> victory -> resume walking
-- Test end-to-end on Narshe mines (save states 1-3 available for testing)
-- Tesseract is NOT installed; use memory reading or GPT-4o-mini vision as fallback
+### Current Status (2026-03-25)
+The unified agent (ff6_agent.py) works. It walked from Narshe gates through the city and into the mines, winning 5 battles. Next priorities:
+- Add LLM-based strategic navigation (the agent currently just walks Up)
+- Handle the Whelk boss fight (may need special logic to avoid attacking the shell)
+- Add healing logic (use Heal Force when HP is low in Magitek battles)
+- Read enemy data from memory for smarter battle decisions
 - Save states: slot 1 = inside Narshe, slot 2 = ?, slot 3 = at Narshe gates (post-intro)
+- Tesseract is NOT installed; memory reading works well, GPT-4o-mini vision available as fallback
+- Key learning: simple state machine + memory >> complex LLM for moment-to-moment play
 
 ### Hold button issues (resolved)
 
