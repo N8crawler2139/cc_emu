@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FF6 AI Player Dashboard - Enhanced</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        }
+        
+        .panel h2 {
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+            padding-bottom: 10px;
+        }
+        
+        .panel h3 {
+            margin: 15px 0 10px 0;
+            font-size: 1.2em;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .emulator-view {
+            grid-column: 2;
+            min-height: 400px;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #emulator-screen {
+            background: #000;
+            border-radius: 5px;
+            width: 100%;
+            height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #emulator-screen img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        
+        .control-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            padding: 10px 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn.success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        }
+        
+        .btn.danger {
+            background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-indicator.active {
+            background: #38ef7d;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-indicator.inactive {
+            background: #eb3349;
+        }
+        
+        .status-indicator.paused {
+            background: #ffc107;
+        }
+        
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(56, 239, 125, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(56, 239, 125, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(56, 239, 125, 0);
+            }
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .metric-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #38ef7d;
+        }
+        
+        .metric-label {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-top: 5px;
+        }
+        
+        .decision-log {
+            height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 5px;
+            padding: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        .decision-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid #667eea;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .manual-controls {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px;
+            margin-top: 10px;
+        }
+        
+        .manual-btn {
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .manual-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .settings-form {
+            margin-top: 15px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .form-group input[type="number"],
+        .form-group input[type="text"],
+        .form-group select,
+        .form-group input[type="range"] {
+            width: 100%;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            color: white;
+        }
+        
+        .form-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        
+        .range-value {
+            display: inline-block;
+            margin-left: 10px;
+            min-width: 40px;
+            text-align: right;
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 15px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.7);
+            transition: all 0.3s;
+        }
+        
+        .tab.active {
+            color: white;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .tab:hover {
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .config-section {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .config-section h4 {
+            margin-bottom: 10px;
+            color: #38ef7d;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎮 FF6 AI Player Dashboard - Enhanced</h1>
+            <p>Real-time monitoring and control for autonomous gameplay</p>
+        </div>
+        
+        <div class="dashboard">
+            <!-- Left Panel: Controls & Configuration -->
+            <div class="panel">
+                <h2>Control Center</h2>
+                
+                <div class="control-buttons">
+                    <button class="btn success" id="start-btn" onclick="startAI()">Start AI</button>
+                    <button class="btn danger" id="stop-btn" onclick="stopAI()" disabled>Stop AI</button>
+                    <button class="btn" id="pause-btn" onclick="pauseAI()" disabled>Pause</button>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Configuration</h2>
+                
+                <div class="tabs">
+                    <button class="tab active" onclick="showTab('basic')">Basic</button>
+                    <button class="tab" onclick="showTab('ai')">AI Settings</button>
+                    <button class="tab" onclick="showTab('advanced')">Advanced</button>
+                </div>
+                
+                <!-- Basic Settings Tab -->
+                <div id="basic-tab" class="tab-content active">
+                    <div class="settings-form">
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="launch-emulator" checked>
+                                Launch Emulator on Start
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="enable-learning" checked>
+                                Enable Learning System
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="screenshot-interval">Screenshot Interval (s)</label>
+                            <input type="number" id="screenshot-interval" value="5" min="1" max="60">
+                        </div>
+                        <div class="form-group">
+                            <label for="decision-delay">Decision Delay (ms)</label>
+                            <input type="number" id="decision-delay" value="500" min="100" max="5000" step="100">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- AI Settings Tab -->
+                <div id="ai-tab" class="tab-content">
+                    <div class="settings-form">
+                        <div class="config-section">
+                            <h4>Learning Parameters</h4>
+                            <div class="form-group">
+                                <label for="learning-rate">
+                                    Learning Rate
+                                    <span class="range-value" id="learning-rate-value">0.1</span>
+                                </label>
+                                <input type="range" id="learning-rate" min="0.01" max="1" step="0.01" value="0.1" 
+                                       oninput="updateRangeValue('learning-rate')">
+                            </div>
+                            <div class="form-group">
+                                <label for="exploration-rate">
+                                    Exploration Rate
+                                    <span class="range-value" id="exploration-rate-value">0.2</span>
+                                </label>
+                                <input type="range" id="exploration-rate" min="0" max="1" step="0.05" value="0.2"
+                                       oninput="updateRangeValue('exploration-rate')">
+                            </div>
+                            <div class="form-group">
+                                <label for="discount-factor">
+                                    Discount Factor (γ)
+                                    <span class="range-value" id="discount-factor-value">0.95</span>
+                                </label>
+                                <input type="range" id="discount-factor" min="0" max="1" step="0.05" value="0.95"
+                                       oninput="updateRangeValue('discount-factor')">
+                            </div>
+                        </div>
+                        
+                        <div class="config-section">
+                            <h4>AI Behavior</h4>
+                            <div class="form-group">
+                                <label for="ai-mode">AI Mode</label>
+                                <select id="ai-mode">
+                                    <option value="balanced">Balanced</option>
+                                    <option value="exploration">Exploration</option>
+                                    <option value="exploitation">Exploitation</option>
+                                    <option value="speedrun">Speedrun</option>
+                                    <option value="completionist">Completionist</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="confidence-threshold">
+                                    Confidence Threshold
+                                    <span class="range-value" id="confidence-threshold-value">0.7</span>
+                                </label>
+                                <input type="range" id="confidence-threshold" min="0" max="1" step="0.05" value="0.7"
+                                       oninput="updateRangeValue('confidence-threshold')">
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="aggressive-combat" checked>
+                                    Aggressive Combat Strategy
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="auto-grind">
+                                    Enable Auto-Grinding
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Advanced Settings Tab -->
+                <div id="advanced-tab" class="tab-content">
+                    <div class="settings-form">
+                        <div class="config-section">
+                            <h4>Performance</h4>
+                            <div class="form-group">
+                                <label for="max-memory-buffer">Memory Buffer Size</label>
+                                <input type="number" id="max-memory-buffer" value="1000" min="100" max="10000" step="100">
+                            </div>
+                            <div class="form-group">
+                                <label for="batch-size">Learning Batch Size</label>
+                                <input type="number" id="batch-size" value="32" min="8" max="128" step="8">
+                            </div>
+                            <div class="form-group">
+                                <label for="update-frequency">Model Update Frequency</label>
+                                <input type="number" id="update-frequency" value="100" min="10" max="1000" step="10">
+                            </div>
+                        </div>
+                        
+                        <div class="config-section">
+                            <h4>API Settings</h4>
+                            <div class="form-group">
+                                <label for="ai-model">AI Model</label>
+                                <select id="ai-model">
+                                    <option value="gpt-4o-mini">GPT-4o-mini (Fast)</option>
+                                    <option value="gpt-4">GPT-4 (Accurate)</option>
+                                    <option value="gpt-3.5-turbo">GPT-3.5-turbo (Budget)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="max-tokens">Max Response Tokens</label>
+                                <input type="number" id="max-tokens" value="150" min="50" max="500" step="10">
+                            </div>
+                            <div class="form-group">
+                                <label for="temperature">
+                                    AI Temperature
+                                    <span class="range-value" id="temperature-value">0.7</span>
+                                </label>
+                                <input type="range" id="temperature" min="0" max="2" step="0.1" value="0.7"
+                                       oninput="updateRangeValue('temperature')">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <button class="btn" onclick="saveConfiguration()">Save Configuration</button>
+                            <button class="btn" onclick="loadConfiguration()">Load Configuration</button>
+                            <button class="btn danger" onclick="resetConfiguration()">Reset to Defaults</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Center Panel: Emulator View -->
+            <div class="panel emulator-view">
+                <h2>Emulator View</h2>
+                <div id="emulator-screen">
+                    <span>No emulator connected</span>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Manual Override</h2>
+                <div class="manual-controls">
+                    <button class="manual-btn" onclick="sendCommand('up')">↑</button>
+                    <button class="manual-btn" onclick="sendCommand('Y')">Y</button>
+                    <button class="manual-btn" onclick="sendCommand('X')">X</button>
+                    <button class="manual-btn" onclick="sendCommand('left')">←</button>
+                    <button class="manual-btn" onclick="sendCommand('down')">↓</button>
+                    <button class="manual-btn" onclick="sendCommand('right')">→</button>
+                    <button class="manual-btn" onclick="sendCommand('L')">L</button>
+                    <button class="manual-btn" onclick="sendCommand('B')">B</button>
+                    <button class="manual-btn" onclick="sendCommand('A')">A</button>
+                    <button class="manual-btn" onclick="sendCommand('select')">SEL</button>
+                    <button class="manual-btn" onclick="sendCommand('start')">STR</button>
+                    <button class="manual-btn" onclick="sendCommand('R')">R</button>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Save States</h2>
+                <div class="control-buttons">
+                    <button class="btn" onclick="saveState()">Save State</button>
+                    <button class="btn" onclick="loadState()">Load State</button>
+                    <button class="btn danger" onclick="clearState()">Clear States</button>
+                </div>
+            </div>
+            
+            <!-- Right Panel: Status & Metrics -->
+            <div class="panel">
+                <h2>System Status</h2>
+                <div id="status-info">
+                    <p><span class="status-indicator inactive"></span> AI: <span id="ai-status">Stopped</span></p>
+                    <p><span class="status-indicator inactive"></span> Emulator: <span id="emulator-status">Disconnected</span></p>
+                    <p>State: <span id="game-state">Unknown</span></p>
+                    <p>Learning: <span id="learning-status">Enabled</span></p>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Performance Metrics</h2>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-value" id="battles-won">0</div>
+                        <div class="metric-label">Battles Won</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="battles-lost">0</div>
+                        <div class="metric-label">Battles Lost</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="decisions-made">0</div>
+                        <div class="metric-label">Decisions</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="efficiency">0%</div>
+                        <div class="metric-label">Efficiency</div>
+                    </div>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Party Status</h2>
+                <div id="party-status">
+                    <p>No party data available</p>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Active Quest</h2>
+                <div id="quest-info">
+                    <p>No active quest</p>
+                </div>
+                
+                <h2 style="margin-top: 20px;">Decision Log</h2>
+                <div class="decision-log" id="decision-log">
+                    <div class="decision-entry">Waiting for AI to start...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        // Tab switching
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        // Update range value display
+        function updateRangeValue(id) {
+            const input = document.getElementById(id);
+            const display = document.getElementById(`${id}-value`);
+            display.textContent = input.value;
+        }
+        
+        // Configuration management
+        function saveConfiguration() {
+            const config = {
+                basic: {
+                    launchEmulator: document.getElementById('launch-emulator').checked,
+                    enableLearning: document.getElementById('enable-learning').checked,
+                    screenshotInterval: document.getElementById('screenshot-interval').value,
+                    decisionDelay: document.getElementById('decision-delay').value
+                },
+                ai: {
+                    learningRate: document.getElementById('learning-rate').value,
+                    explorationRate: document.getElementById('exploration-rate').value,
+                    discountFactor: document.getElementById('discount-factor').value,
+                    aiMode: document.getElementById('ai-mode').value,
+                    confidenceThreshold: document.getElementById('confidence-threshold').value,
+                    aggressiveCombat: document.getElementById('aggressive-combat').checked,
+                    autoGrind: document.getElementById('auto-grind').checked
+                },
+                advanced: {
+                    maxMemoryBuffer: document.getElementById('max-memory-buffer').value,
+                    batchSize: document.getElementById('batch-size').value,
+                    updateFrequency: document.getElementById('update-frequency').value,
+                    aiModel: document.getElementById('ai-model').value,
+                    maxTokens: document.getElementById('max-tokens').value,
+                    temperature: document.getElementById('temperature').value
+                }
+            };
+            
+            localStorage.setItem('aiPlayerConfig', JSON.stringify(config));
+            alert('Configuration saved!');
+        }
+        
+        function loadConfiguration() {
+            const savedConfig = localStorage.getItem('aiPlayerConfig');
+            if (!savedConfig) {
+                alert('No saved configuration found');
+                return;
+            }
+            
+            const config = JSON.parse(savedConfig);
+            
+            // Load basic settings
+            document.getElementById('launch-emulator').checked = config.basic.launchEmulator;
+            document.getElementById('enable-learning').checked = config.basic.enableLearning;
+            document.getElementById('screenshot-interval').value = config.basic.screenshotInterval;
+            document.getElementById('decision-delay').value = config.basic.decisionDelay;
+            
+            // Load AI settings
+            document.getElementById('learning-rate').value = config.ai.learningRate;
+            document.getElementById('exploration-rate').value = config.ai.explorationRate;
+            document.getElementById('discount-factor').value = config.ai.discountFactor;
+            document.getElementById('ai-mode').value = config.ai.aiMode;
+            document.getElementById('confidence-threshold').value = config.ai.confidenceThreshold;
+            document.getElementById('aggressive-combat').checked = config.ai.aggressiveCombat;
+            document.getElementById('auto-grind').checked = config.ai.autoGrind;
+            
+            // Load advanced settings
+            document.getElementById('max-memory-buffer').value = config.advanced.maxMemoryBuffer;
+            document.getElementById('batch-size').value = config.advanced.batchSize;
+            document.getElementById('update-frequency').value = config.advanced.updateFrequency;
+            document.getElementById('ai-model').value = config.advanced.aiModel;
+            document.getElementById('max-tokens').value = config.advanced.maxTokens;
+            document.getElementById('temperature').value = config.advanced.temperature;
+            
+            // Update range displays
+            ['learning-rate', 'exploration-rate', 'discount-factor', 'confidence-threshold', 'temperature'].forEach(id => {
+                updateRangeValue(id);
+            });
+            
+            alert('Configuration loaded!');
+        }
+        
+        function resetConfiguration() {
+            if (!confirm('Reset all settings to defaults?')) return;
+            
+            // Reset all inputs to defaults
+            document.getElementById('launch-emulator').checked = true;
+            document.getElementById('enable-learning').checked = true;
+            document.getElementById('screenshot-interval').value = 5;
+            document.getElementById('decision-delay').value = 500;
+            document.getElementById('learning-rate').value = 0.1;
+            document.getElementById('exploration-rate').value = 0.2;
+            document.getElementById('discount-factor').value = 0.95;
+            document.getElementById('ai-mode').value = 'balanced';
+            document.getElementById('confidence-threshold').value = 0.7;
+            document.getElementById('aggressive-combat').checked = true;
+            document.getElementById('auto-grind').checked = false;
+            document.getElementById('max-memory-buffer').value = 1000;
+            document.getElementById('batch-size').value = 32;
+            document.getElementById('update-frequency').value = 100;
+            document.getElementById('ai-model').value = 'gpt-4o-mini';
+            document.getElementById('max-tokens').value = 150;
+            document.getElementById('temperature').value = 0.7;
+            
+            // Update range displays
+            ['learning-rate', 'exploration-rate', 'discount-factor', 'confidence-threshold', 'temperature'].forEach(id => {
+                updateRangeValue(id);
+            });
+            
+            localStorage.removeItem('aiPlayerConfig');
+            alert('Configuration reset to defaults!');
+        }
+        
+        // Get all configuration values for AI start
+        function getAllConfig() {
+            return {
+                launchEmulator: document.getElementById('launch-emulator').checked,
+                enableLearning: document.getElementById('enable-learning').checked,
+                screenshotInterval: parseInt(document.getElementById('screenshot-interval').value),
+                decisionDelay: parseInt(document.getElementById('decision-delay').value),
+                learningRate: parseFloat(document.getElementById('learning-rate').value),
+                explorationRate: parseFloat(document.getElementById('exploration-rate').value),
+                discountFactor: parseFloat(document.getElementById('discount-factor').value),
+                aiMode: document.getElementById('ai-mode').value,
+                confidenceThreshold: parseFloat(document.getElementById('confidence-threshold').value),
+                aggressiveCombat: document.getElementById('aggressive-combat').checked,
+                autoGrind: document.getElementById('auto-grind').checked,
+                maxMemoryBuffer: parseInt(document.getElementById('max-memory-buffer').value),
+                batchSize: parseInt(document.getElementById('batch-size').value),
+                updateFrequency: parseInt(document.getElementById('update-frequency').value),
+                aiModel: document.getElementById('ai-model').value,
+                maxTokens: parseInt(document.getElementById('max-tokens').value),
+                temperature: parseFloat(document.getElementById('temperature').value)
+            };
+        }
+        
+        // Start AI with configuration
+        async function startAI() {
+            const config = getAllConfig();
+            
+            const response = await fetch('/api/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            });
+            
+            if (response.ok) {
+                document.getElementById('start-btn').disabled = true;
+                document.getElementById('stop-btn').disabled = false;
+                document.getElementById('pause-btn').disabled = false;
+            }
+        }
+        
+        async function stopAI() {
+            const response = await fetch('/api/stop', {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                document.getElementById('start-btn').disabled = false;
+                document.getElementById('stop-btn').disabled = true;
+                document.getElementById('pause-btn').disabled = true;
+            }
+        }
+        
+        async function pauseAI() {
+            const response = await fetch('/api/pause', {
+                method: 'POST'
+            });
+            
+            if (response.ok) {
+                const btn = document.getElementById('pause-btn');
+                btn.textContent = btn.textContent === 'Pause' ? 'Resume' : 'Pause';
+            }
+        }
+        
+        async function sendCommand(command) {
+            await fetch('/api/manual-control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ command })
+            });
+        }
+        
+        async function saveState() {
+            const response = await fetch('/api/save-state', {
+                method: 'POST'
+            });
+            if (response.ok) {
+                alert('State saved successfully!');
+            }
+        }
+        
+        async function loadState() {
+            const response = await fetch('/api/load-state', {
+                method: 'POST'
+            });
+            if (response.ok) {
+                alert('State loaded successfully!');
+            }
+        }
+        
+        async function clearState() {
+            if (confirm('Clear all save states?')) {
+                alert('Save states cleared!');
+            }
+        }
+        
+        // Socket.IO event handlers
+        socket.on('status_update', (data) => {
+            // Update AI status
+            document.getElementById('ai-status').textContent = data.ai_status;
+            const aiIndicator = document.querySelector('#status-info .status-indicator:first-child');
+            aiIndicator.className = 'status-indicator ' + 
+                (data.ai_status === 'running' ? 'active' : 
+                 data.ai_status === 'paused' ? 'paused' : 'inactive');
+            
+            // Update emulator status
+            document.getElementById('emulator-status').textContent = data.emulator_status;
+            const emulatorIndicator = document.querySelector('#status-info .status-indicator:nth-child(2)');
+            emulatorIndicator.className = 'status-indicator ' + 
+                (data.emulator_status === 'connected' ? 'active' : 'inactive');
+            
+            // Update game state
+            document.getElementById('game-state').textContent = data.current_state || 'Unknown';
+            
+            // Update learning status
+            document.getElementById('learning-status').textContent = data.learning_enabled ? 'Enabled' : 'Disabled';
+            
+            // Update performance metrics
+            if (data.performance_metrics) {
+                document.getElementById('battles-won').textContent = data.performance_metrics.battles_won || 0;
+                document.getElementById('battles-lost').textContent = data.performance_metrics.battles_lost || 0;
+                document.getElementById('decisions-made').textContent = data.performance_metrics.total_decisions || 0;
+                document.getElementById('efficiency').textContent = 
+                    Math.round(data.performance_metrics.navigation_efficiency * 100) + '%';
+            }
+            
+            // Update party status
+            if (data.party_status && data.party_status.length > 0) {
+                const partyHtml = data.party_status.map(member => 
+                    `<p>${member.name}: HP ${member.hp}/${member.max_hp} MP ${member.mp}/${member.max_mp}</p>`
+                ).join('');
+                document.getElementById('party-status').innerHTML = partyHtml;
+            }
+            
+            // Update quest info
+            if (data.active_quest && data.active_quest !== 'None') {
+                document.getElementById('quest-info').innerHTML = `<p>${data.active_quest}</p>`;
+            }
+            
+            // Update decision log
+            if (data.last_decision && data.last_decision !== 'None') {
+                const logEntry = document.createElement('div');
+                logEntry.className = 'decision-entry';
+                const timestamp = new Date().toLocaleTimeString();
+                logEntry.textContent = `[${timestamp}] ${data.last_decision}`;
+                const log = document.getElementById('decision-log');
+                log.insertBefore(logEntry, log.firstChild);
+                // Keep only last 20 entries
+                while (log.children.length > 20) {
+                    log.removeChild(log.lastChild);
+                }
+            }
+        });
+        
+        socket.on('screenshot_update', (data) => {
+            if (data.image) {
+                const img = document.createElement('img');
+                img.src = 'data:image/png;base64,' + data.image;
+                const screen = document.getElementById('emulator-screen');
+                screen.innerHTML = '';
+                screen.appendChild(img);
+            }
+        });
+        
+        // Load saved configuration on page load
+        window.addEventListener('load', () => {
+            const savedConfig = localStorage.getItem('aiPlayerConfig');
+            if (savedConfig) {
+                loadConfiguration();
+            }
+        });
+        
+        // Periodic status update
+        setInterval(async () => {
+            const response = await fetch('/api/status');
+            if (response.ok) {
+                const data = await response.json();
+                socket.emit('request_status', data);
+            }
+        }, 2000);
+    </script>
+</body>
+</html>

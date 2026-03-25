@@ -1,0 +1,90 @@
+{
+  "strategies": [
+    {
+      "id": "battle_1756959828.843794",
+      "type": "battle",
+      "context": {
+        "enemy": "Goblin",
+        "location": "World Map"
+      },
+      "actions": [
+        "Attack",
+        "Fire"
+      ],
+      "outcome": "success",
+      "effectiveness_score": 0.8,
+      "timestamp": "2025-09-03T22:23:48.843794",
+      "metadata": {}
+    },
+    {
+      "id": "battle_1756959891.40116",
+      "type": "battle",
+      "context": {
+        "enemy": "Goblin",
+        "location": "World Map"
+      },
+      "actions": [
+        "Attack",
+        "Fire"
+      ],
+      "outcome": "success",
+      "effectiveness_score": 0.8,
+      "timestamp": "2025-09-03T22:24:51.401160",
+      "metadata": {}
+    },
+    {
+      "id": "battle_1756959940.880717",
+      "type": "battle",
+      "context": {
+        "enemy": "Goblin",
+        "location": "World Map"
+      },
+      "actions": [
+        "Attack",
+        "Fire"
+      ],
+      "outcome": "success",
+      "effectiveness_score": 0.8,
+      "timestamp": "2025-09-03T22:25:40.880717",
+      "metadata": {}
+    },
+    {
+      "id": "battle_1756959973.977656",
+      "type": "battle",
+      "context": {
+        "enemy": "Goblin",
+        "location": "World Map"
+      },
+      "actions": [
+        "Attack",
+        "Fire"
+      ],
+      "outcome": "success",
+      "effectiveness_score": 0.8,
+      "timestamp": "2025-09-03T22:26:13.977656",
+      "metadata": {}
+    },
+    {
+      "id": "battle_1756959997.434478",
+      "type": "battle",
+      "context": {
+        "enemy": "Goblin",
+        "location": "World Map"
+      },
+      "actions": [
+        "Attack",
+        "Fire"
+      ],
+      "outcome": "success",
+      "effectiveness_score": 0.8,
+      "timestamp": "2025-09-03T22:26:37.434478",
+      "metadata": {}
+    }
+  ],
+  "patterns": [],
+  "mechanics": [],
+  "encounter_memory": {},
+  "decision_tree": {},
+  "performance_history": [],
+  "last_updated": "2025-09-04T07:12:52.734843"
+}

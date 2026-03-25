@@ -1,0 +1,80 @@
+# Conda environment files
+Lib/
+Library/
+Scripts/
+Tools/
+DLLs/
+*.dll
+*.pyd
+*.exe
+*.pth
+Include/
+share/
+man/
+etc/
+compiler_compat/
+pkgs/
+conda-meta/
+LICENSE_PYTHON.txt
+tcl/
+*.egg-info/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# BizHawk - include Lua scripts but not the full emulator
+Bizhawk/*
+!Bizhawk/Lua/
+!Bizhawk/SNES/
+Bizhawk/SNES/*.zip
+
+# Communication files
+bizhawk_commands.txt
+bizhawk_responses.txt
+
+# Screenshots
+ai_screenshots/
+
+# Playwright
+.playwright-mcp/
+
+# Claude Code
+.claude/
+
+# Config with API keys
+config.py
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Misc
+*.png
+*.jpg
+.nonadmin
+adaptive_learning_state.json
+
+# Debug/PDB files
+*.pdb
+
+# Logs
+logs/
+*.log
+
+# Save states
+slot1
+slot2
+slot3
+
+# Runtime/temp
+nul
+emulator_commands.txt
+test_results.json
+performance_metrics.json
+quest_progress.json
+
+# OS
+Thumbs.db
+Desktop.ini

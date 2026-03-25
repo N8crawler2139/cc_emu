@@ -1,0 +1,1 @@
+curl -X POST https://dgxdev.rain.tech/v1/chat/completions -H "Content-Type: application/json" -H "X-API-Key: aN5dC7vVxO6dJEdjwZmPxtGofzqpf8Vw" -d "{\"model\": \"gpt-oss:120b\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello, this is Mike and I'm testing my API key\"}]}
