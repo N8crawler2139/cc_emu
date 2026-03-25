@@ -9,16 +9,18 @@ import time
 import subprocess
 import os
 from pathlib import Path
+from ff6_game_state import FF6GameStateReader
 
 class BizHawkControllerFile:
     def __init__(self, bizhawk_path=None, rom_path=None, lua_script_path=None):
         self.bizhawk_path = bizhawk_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\EmuHawk.exe"
         self.rom_path = rom_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\SNES\Final Fantasy III (USA).zip"
-        self.lua_script_path = lua_script_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\bizhawk_simple_server.lua"
+        self.lua_script_path = lua_script_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\Lua\bizhawk_gamestate_server.lua"
         self.command_file = "bizhawk_commands.txt"
         self.response_file = "bizhawk_responses.txt"
         self.process = None
         self.connected = False
+        self.game_state_reader = FF6GameStateReader()
         
     def launch_bizhawk(self):
         """Launch BizHawk with the specified ROM"""
@@ -32,11 +34,14 @@ class BizHawkControllerFile:
             print(f"Launching BizHawk with ROM: {self.rom_path}")
             
             # Launch BizHawk with the ROM and auto-load Lua script
+            # ROM must be LAST argument per BizHawk docs
+            # Use our project dir as cwd so Lua file I/O lands here
+            project_dir = os.path.dirname(os.path.abspath(__file__))
             self.process = subprocess.Popen([
                 self.bizhawk_path,
+                "--lua", self.lua_script_path,
                 self.rom_path,
-                "--lua=" + self.lua_script_path  # Auto-load Lua script
-            ])
+            ], cwd=project_dir)
             
             # Wait a moment for BizHawk to start
             print("Waiting for BizHawk to start...")
@@ -314,6 +319,30 @@ class BizHawkControllerFile:
     def is_connected(self):
         """Check if connected to BizHawk"""
         return self.connected
+
+    def get_game_state(self):
+        """Read current FF6 game state from the Lua script's JSON output."""
+        return self.game_state_reader.read()
+
+    def request_game_state(self):
+        """Send GAMESTATE command to force an immediate state dump, then read it."""
+        if not self.is_connected():
+            return None
+        self._send_command("GAMESTATE")
+        time.sleep(0.3)
+        self._receive_response(timeout=2)
+        return self.game_state_reader.read(force=True)
+
+    def read_memory(self, address, count=1):
+        """Read raw memory bytes from emulator. Returns list of byte values."""
+        if not self.is_connected():
+            return None
+        self._send_command(f"READMEM {address} {count}")
+        response = self._receive_response(timeout=3)
+        if response and response.startswith("MEM:"):
+            values_str = response[4:]
+            return [int(v) for v in values_str.split(",")]
+        return None
     
     def get_status(self):
         """Get emulator status"""

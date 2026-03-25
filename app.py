@@ -11,6 +11,8 @@ import os
 from bizhawk_controller_file import BizHawkControllerFile as BizHawkController
 from game_controller import FF3GameController
 from screenshot_ocr import ScreenshotOCR
+from ff6_game_state import FF6GameStateReader
+from ff6_actions import FF6Actions
 
 app = Flask(__name__)
 
@@ -646,10 +648,200 @@ def ocr_existing_image():
             'message': f'Error performing OCR: {str(e)}'
         })
 
+# --- Game State Endpoints ---
+game_state_reader = FF6GameStateReader()
+
+@app.route('/gamestate', methods=['GET'])
+def get_game_state():
+    """Get full FF6 game state (party, inventory, location, etc.)"""
+    state = game_state_reader.read()
+    if state:
+        return jsonify({
+            'success': True,
+            'state': state.to_dict(),
+            'summary': state.full_summary(),
+        })
+    return jsonify({
+        'success': False,
+        'message': 'Game state not available. Is BizHawk running with bizhawk_gamestate_server.lua?'
+    })
+
+@app.route('/gamestate/party', methods=['GET'])
+def get_party():
+    """Get active party members."""
+    state = game_state_reader.read()
+    if state:
+        return jsonify({
+            'success': True,
+            'party': [c.to_dict() for c in state.party],
+            'summary': state.party_summary(),
+        })
+    return jsonify({'success': False, 'message': 'Game state not available'})
+
+@app.route('/gamestate/inventory', methods=['GET'])
+def get_inventory():
+    """Get current inventory."""
+    state = game_state_reader.read()
+    if state:
+        return jsonify({
+            'success': True,
+            'inventory': [i.to_dict() for i in state.inventory],
+            'summary': state.inventory_summary(),
+        })
+    return jsonify({'success': False, 'message': 'Game state not available'})
+
+@app.route('/gamestate/character/<name>', methods=['GET'])
+def get_character(name):
+    """Get a specific character's full state."""
+    state = game_state_reader.read()
+    if state:
+        char = state.get_character(name)
+        if char:
+            return jsonify({
+                'success': True,
+                'character': char.to_dict(),
+                'equipment': char.equipment_summary(),
+                'summary': char.summary(),
+            })
+        return jsonify({
+            'success': False,
+            'message': f'Character "{name}" not found',
+            'available': [c.name for c in state.all_characters],
+        })
+    return jsonify({'success': False, 'message': 'Game state not available'})
+
+@app.route('/gamestate/summary', methods=['GET'])
+def get_state_summary():
+    """Get a text summary of game state (good for AI context)."""
+    state = game_state_reader.read()
+    if state:
+        return jsonify({
+            'success': True,
+            'summary': state.full_summary(),
+        })
+    return jsonify({'success': False, 'message': 'Game state not available'})
+
+# --- High-Level Action Endpoints ---
+ff6_actions = None
+
+def get_ff6_actions():
+    """Get or create FF6Actions instance."""
+    global ff6_actions, bizhawk_controller
+    if ff6_actions is None and bizhawk_controller and bizhawk_controller.is_connected():
+        ff6_actions = FF6Actions(bizhawk_controller)
+    return ff6_actions
+
+@app.route('/action/equip', methods=['POST'])
+def action_equip():
+    """Equip an item. JSON body: {character, slot, item}"""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    data = request.get_json() or {}
+    character = data.get('character', '')
+    slot = data.get('slot', 'weapon')
+    item = data.get('item', '')
+    if not character or not item:
+        return jsonify({'success': False, 'message': 'Required: character, slot, item'})
+    result = actions.equip_item(character, slot, item)
+    return jsonify({'success': result, 'message': f'Equip {item} on {character} ({slot})'})
+
+@app.route('/action/use-item', methods=['POST'])
+def action_use_item():
+    """Use an item. JSON body: {item, target (optional)}"""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    data = request.get_json() or {}
+    item = data.get('item', '')
+    target = data.get('target')
+    if not item:
+        return jsonify({'success': False, 'message': 'Required: item'})
+    result = actions.use_item(item, target)
+    return jsonify({'success': result, 'message': f'Use {item}' + (f' on {target}' if target else '')})
+
+@app.route('/action/walk', methods=['POST'])
+def action_walk():
+    """Walk in a direction. JSON body: {direction, seconds}"""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    data = request.get_json() or {}
+    direction = data.get('direction', 'up')
+    seconds = float(data.get('seconds', 1.0))
+    result = actions.walk(direction, seconds)
+    return jsonify({'success': result, 'message': f'Walk {direction} for {seconds}s'})
+
+@app.route('/action/open-menu', methods=['POST'])
+def action_open_menu():
+    """Open the main menu."""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    actions.open_menu()
+    return jsonify({'success': True, 'message': 'Menu opened'})
+
+@app.route('/action/close-menu', methods=['POST'])
+def action_close_menu():
+    """Close all menus."""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    actions.close_all_menus()
+    return jsonify({'success': True, 'message': 'Menus closed'})
+
+@app.route('/action/talk', methods=['POST'])
+def action_talk():
+    """Talk to NPC / advance dialog."""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    presses = int(request.args.get('presses', 1))
+    actions.advance_dialog(presses)
+    return jsonify({'success': True, 'message': f'Dialog advanced ({presses} presses)'})
+
+@app.route('/action/save', methods=['POST'])
+def action_save():
+    """Save the game. JSON body: {slot (1-3)}"""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    data = request.get_json() or {}
+    slot = int(data.get('slot', 1))
+    actions.save_game(slot)
+    return jsonify({'success': True, 'message': f'Game saved to slot {slot}'})
+
+@app.route('/action/battle/attack', methods=['POST'])
+def action_battle_attack():
+    """Attack in battle."""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    actions.battle_attack()
+    return jsonify({'success': True, 'message': 'Attack executed'})
+
+@app.route('/action/battle/run', methods=['POST'])
+def action_battle_run():
+    """Attempt to run from battle."""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    actions.battle_run()
+    return jsonify({'success': True, 'message': 'Run attempted'})
+
+@app.route('/action/heal', methods=['POST'])
+def action_heal():
+    """Auto-heal party with available items."""
+    actions = get_ff6_actions()
+    if not actions:
+        return jsonify({'success': False, 'message': 'Not connected to emulator'})
+    actions.heal_party()
+    return jsonify({'success': True, 'message': 'Heal party attempted'})
+
 @app.route('/cleanup', methods=['POST'])
 def cleanup():
     """Clean up all resources"""
-    global bizhawk_controller, game_controller, screenshot_ocr, is_running
+    global bizhawk_controller, game_controller, screenshot_ocr, is_running, ff6_actions
     
     if bizhawk_controller:
         bizhawk_controller.cleanup()
@@ -657,6 +849,7 @@ def cleanup():
     bizhawk_controller = None
     game_controller = None
     screenshot_ocr = None
+    ff6_actions = None
     is_running = False
     
     return jsonify({

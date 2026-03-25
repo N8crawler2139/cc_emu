@@ -136,3 +136,32 @@ response = requests.post(f"http://localhost:5000/hold/{button_name}", json=data,
 - Lua console should show "HOLD Up 600" instead of "PRESS Up 6"
 
 **Status:** ✅ CRITICAL FIX COMPLETE - Hold button duration functionality fully operational
+
+## Phase 3A - Memory Reading & Game State (2026-03-25)
+
+**COMPLETED:** FF6 SNES RAM reading and structured game state system
+
+**New Files:**
+- `Bizhawk/Lua/bizhawk_gamestate_server.lua` - Enhanced Lua script that reads FF6 memory every 30 frames and writes structured JSON to `bizhawk_gamestate.json`. Reads character data ($1600+), party, gold, inventory, map/position, and game mode. Also supports all existing commands (PRESS, HOLD, RELEASE) plus new GAMESTATE and READMEM commands.
+- `ff6_knowledge.py` - Complete FF6 data tables: 243 items, 19+ actors, 52 spells, espers, commands, status flags. Provides lookup functions for resolving raw IDs to names.
+- `ff6_game_state.py` - Python game state reader/parser. Reads Lua JSON output, provides FF6GameState/FF6Character/FF6InventoryItem classes with properties for equipment names, status decoding, summaries. Includes file mtime caching.
+- `ff6_actions.py` - High-level action system. Translates game intentions into button sequences: walk(), open_menu(), equip_item(), use_item(), battle_attack(), save_game(), heal_party(), etc.
+
+**Modified Files:**
+- `bizhawk_controller_file.py` - Now uses gamestate_server.lua, has game state reader, READMEM command support, absolute path for Lua script, proper CWD handling
+- `app.py` - Added /gamestate, /gamestate/party, /gamestate/inventory, /gamestate/character/<name>, /gamestate/summary endpoints. Added /action/* endpoints for high-level actions (equip, walk, talk, save, battle, heal).
+
+**Test Results:**
+- Lua script auto-loads via --lua flag (ROM must be last CLI arg)
+- Game state JSON written every 0.5 sec with character data, gold, map, position
+- Successfully read Terra Lv3, Wedge Lv1, Vicks Lv1 during Narshe opening
+- Equipment, commands, Magitek status all read correctly
+- Walk action confirmed: position changed from (38,49) to (38,41) after walking up
+- All Flask API endpoints return structured JSON
+
+**Known Issues:**
+- Party formation address ($1850) not mapping correctly -- fallback uses all characters with valid HP. Needs memory scanning to find correct address.
+- Steps counter reads garbage (overflow) -- address may be wrong
+- Item names in knowledge base may not be 100% accurate for all 256 IDs -- will refine as we encounter items in gameplay
+
+**Status:** ✅ Phase 3A COMPLETE - Foundation for AI gameplay ready

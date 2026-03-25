@@ -33,6 +33,7 @@ Bizhawk/SNES/*.zip
 # Communication files
 bizhawk_commands.txt
 bizhawk_responses.txt
+bizhawk_gamestate.json
 
 # Screenshots
 ai_screenshots/

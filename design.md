@@ -63,3 +63,39 @@ AI Agent -> FastMCP Protocol -> MCP Server -> Flask API -> Lua Script -> BizHawk
 - PIL/PyAutoGUI for screenshot capture
 - Tesseract OCR for text recognition
 - Dual server architecture (Flask + MCP)
+
+## Phase 3 Architecture - Game State & AI Gameplay
+
+### New Components
+- **Memory Reader** (`bizhawk_gamestate_server.lua`) - Reads FF6 SNES RAM via BizHawk's `mainmemory` API, writes structured JSON every 30 frames
+- **Knowledge Base** (`ff6_knowledge.py`) - Complete FF6 data tables (items, actors, spells, equipment, statuses)
+- **Game State Parser** (`ff6_game_state.py`) - Reads Lua JSON output, resolves IDs to names, provides structured Python API
+- **Action System** (`ff6_actions.py`) - Translates high-level intentions into button sequences
+
+### Extended Communication Flow
+```
+AI Agent -> Flask API -> Action System -> Button Sequences -> Lua Script -> BizHawk
+                |                                                 |
+         Game State API                              Memory Reading (RAM)
+                |                                                 |
+         FF6GameState <---- JSON File <---- bizhawk_gamestate.json
+```
+
+### Game State Data Available
+- Character stats (HP, MP, level, exp, vigor, speed, etc.)
+- Equipment (weapon, shield, helmet, armor, relics, esper)
+- Status effects, battle commands
+- Gold, steps, play time
+- Map ID, X/Y position
+- Game mode flags
+- Full inventory with item names and quantities
+
+### High-Level Action API
+- `/action/walk` - Move character in a direction
+- `/action/equip` - Equip item on character
+- `/action/use-item` - Use inventory item
+- `/action/open-menu` / `/action/close-menu` - Menu control
+- `/action/talk` - NPC interaction / dialog advance
+- `/action/save` - Save game to slot
+- `/action/battle/*` - Battle commands (attack, run, magic, item)
+- `/action/heal` - Auto-heal party with available items

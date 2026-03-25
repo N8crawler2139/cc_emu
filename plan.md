@@ -37,11 +37,30 @@ Transform the emulator controller into an AI-accessible system with visual feedb
 - [x] Test screenshot capture during gameplay
 - [x] Document command syntax and limitations
 
-## Phase 3: Advanced Features (Future)
-- Complex game state understanding
-- Multi-step automation sequences
-- Memory reading integration
-- Multiple game support
+## Phase 3A: Memory Reading & Game State ✅ COMPLETED
+- [x] Lua script reads FF6 SNES RAM (characters, inventory, gold, map, position)
+- [x] Writes structured JSON every 0.5 seconds
+- [x] Python game state parser with FF6 knowledge base (items, actors, spells)
+- [x] Flask API endpoints for game state queries
+- [x] High-level action system (walk, menu, equip, battle, save)
+
+## Phase 3B: Intelligent Menu Navigation (NEXT)
+- [ ] Read menu cursor position from memory for precise navigation
+- [ ] Fix party formation address for accurate party detection
+- [ ] Equip system that scrolls to exact item in equipment list
+- [ ] Battle system that reads enemy data and selects appropriate actions
+
+## Phase 3C: Expert AI ("Knows Everything")
+- [ ] FF6 walkthrough knowledge base (step-by-step game progression)
+- [ ] LLM agent that reads game state + walkthrough to decide next action
+- [ ] Boss strategy database
+- [ ] Optimal equipment/party recommendations
+
+## Phase 3D: Discovery AI ("Knows Nothing")
+- [ ] Reward signal system (HP gained, new areas, story progress, gold)
+- [ ] Exploration strategy using LLM reasoning or RL
+- [ ] Learning from observation (screenshot + memory state)
+- [ ] Progress tracking and strategy memory
 
 ## Technical Requirements
 - FastMCP protocol for AI integration
