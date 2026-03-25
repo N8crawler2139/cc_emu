@@ -1,4 +1,11 @@
-### Hold button issues
+### Current Priority (2026-03-25)
+- Expand Lua memory reading: enemy HP, active character turn, cursor position in submenus
+- Wire full AI loop: field walk -> dialog advance -> battle -> victory -> resume walking
+- Test end-to-end on Narshe mines (save states 1-3 available for testing)
+- Tesseract is NOT installed; use memory reading or GPT-4o-mini vision as fallback
+- Save states: slot 1 = inside Narshe, slot 2 = ?, slot 3 = at Narshe gates (post-intro)
+
+### Hold button issues (resolved)
 
 (CC_RVGAI) C:\Users\Admin\anaconda3\envs\CC_Emu>python chat_with_emulator.py
 🎮 Enhanced SNES Emulator AI Chat

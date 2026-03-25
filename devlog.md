@@ -165,3 +165,31 @@ response = requests.post(f"http://localhost:5000/hold/{button_name}", json=data,
 - Item names in knowledge base may not be 100% accurate for all 256 IDs -- will refine as we encounter items in gameplay
 
 **Status:** ✅ Phase 3A COMPLETE - Foundation for AI gameplay ready
+
+## Phase 3C - Expert AI System (2026-03-25)
+
+**COMPLETED:** Two-tier AI + memory-based battle system
+
+**Architecture:**
+- Director (GPT-4o + vision): Strategic decisions every ~12 seconds
+- Pilot (GPT-4o-mini): Tactical execution in tight loop, with deterministic battle override
+- Battle handling: Pure memory-based, no LLM needed. Reads battle_menu from WRAM, presses A when menu active, waits during animations.
+
+**Key Discovery:** Memory reading >> OCR >> LLM for menu navigation. The Lua script reads battle state directly from SNES RAM. Deterministic logic handles combat perfectly. LLM is only needed for high-level strategy (where to walk, what goal to pursue).
+
+**Test Results:**
+- AI walked from Narshe gates into city, triggered guard dialog
+- Director (with vision) correctly identified dialog and battle states
+- Battle handler won the Narshe guard fight using MagiTek beam attacks
+- All 3 party members survived (Terra HP:12, Wedge HP:36, Vicks HP:34)
+
+**Issues Found & Fixed:**
+- Screenshot capture: BitBlt fails with BizHawk renderer, switched to ImageGrab
+- SetForegroundWindow steals focus and opens BizHawk menus, removed
+- GPT-4o refuses vision+JSON combo with certain prompts, removed response_format constraint
+- Battle detection: $0201 unreliable, using position.x==0 + battle_menu>0 instead
+- battle_magic() was pressing Down into Item menu, fixed to just press A
+
+**Note:** Tesseract OCR is NOT installed. Vision model (GPT-4o-mini) can read game text if needed, but memory reading is preferred.
+
+**Status:** ✅ Phase 3C FUNCTIONAL - AI can navigate field and win battles
