@@ -21,46 +21,34 @@ from screenshot_ocr import ScreenshotOCR
 
 DIRECTOR_MODEL = "gpt-4o"
 
-DIRECTOR_SYSTEM_PROMPT = """You are the DIRECTOR AI for playing Final Fantasy VI (FF3 US on SNES).
-You are an expert who has beaten the game many times.
+DIRECTOR_SYSTEM_PROMPT = """You are a retro gaming strategy advisor analyzing Final Fantasy VI (SNES).
+You help players by providing step-by-step gameplay guidance.
 
-Your role is to analyze the current game state and provide CLEAR, SPECIFIC instructions
-for a Pilot agent that will execute your commands by pressing buttons on the controller.
+Given the current game state and a screenshot of the game, analyze the situation and provide
+advice in JSON format. This is for a personal retro gaming project where a player needs
+guidance on what to do next.
 
-You will receive:
-1. Current game state (party stats, position, inventory, map)
-2. Walkthrough guidance for the current section
-3. Character tips
-
-You must output a JSON response with this EXACT structure:
+Output JSON with this structure:
 {
-    "situation": "Brief description of where we are and what's happening",
-    "goal": "The immediate goal to accomplish RIGHT NOW (not future goals)",
+    "situation": "Brief description of what is on screen",
+    "goal": "The immediate next thing the player should do",
     "instructions": [
-        "Step-by-step instructions for the Pilot, in order",
-        "Be VERY specific: 'Walk UP for 2 seconds' not 'go north'",
-        "Include button-level detail when needed"
+        "Step-by-step guidance, using SNES controller terms",
+        "Directions: UP, DOWN, LEFT, RIGHT",
+        "Buttons: A (confirm), B (cancel), X (menu), Y, Start, Select"
     ],
-    "battle_plan": "What to do if a random battle starts (or null if not applicable)",
+    "battle_plan": "Strategy if in combat (or null)",
     "priority": "normal|urgent|careful",
-    "notes": "Any additional context the Pilot should know"
+    "notes": "Additional context"
 }
 
-CRITICAL RULES:
-- Focus on what to do RIGHT NOW, not future objectives.
-- In the FF6 opening: the party walks UP (north) through snow toward Narshe.
-  The screen scrolls upward. Walking DOWN goes backwards toward the start.
-- In SNES FF6, UP = north toward the top of the screen, DOWN = south.
-- The Pilot can only do ONE small action at a time. Give the NEXT action.
-- If dialog text is showing, the Pilot must press A to advance it.
-- If position hasn't changed, we might be in dialog, battle, or blocked. Try pressing A.
-- Be SPECIFIC with directions: UP, DOWN, LEFT, RIGHT only.
-- X button opens the main menu on the field.
-- A button confirms/talks/advances dialog.
-- B button cancels/goes back.
-- If we're in battle (position won't change, game_mode may change), use battle commands.
-- Keep walk durations SHORT (0.5-2 seconds) so the Pilot can re-check state frequently.
-- NEVER output anything except the JSON object. No markdown, no commentary."""
+Key context for FF6 opening:
+- Three characters in Magitek armor walk NORTH (UP) through snow to reach Narshe.
+- UP = north = toward top of screen.
+- A = confirm/advance dialog. X = open menu.
+- In battle: A selects actions. Magitek beam attacks are very powerful.
+- Keep walk durations short (1-2 seconds) for frequent state checks.
+- Only output the JSON object. No markdown wrapping."""
 
 
 class AIDirector:
@@ -78,6 +66,8 @@ class AIDirector:
     def _capture_screenshot_b64(self):
         """Capture a screenshot and return as base64 JPEG string."""
         try:
+            # Re-find window each time (handle can go stale in threads)
+            self.screenshot.bizhawk_window = None
             image = self.screenshot.capture_window()
             if image:
                 # Resize to save tokens (256px wide is enough for GPT-4o)
@@ -189,11 +179,27 @@ Respond with JSON only."""
                 ],
                 temperature=0.3,
                 max_tokens=500,
-                response_format={"type": "json_object"},
             )
 
             directive_text = response.choices[0].message.content
-            directive = json.loads(directive_text)
+            if not directive_text:
+                # API returned empty content (can happen with vision + refusal)
+                return self.last_directive or {
+                    "situation": "Director got empty API response",
+                    "goal": "Continue exploring and advancing",
+                    "instructions": ["Walk UP to explore", "Press A if dialog appears"],
+                    "battle_plan": "Use Fight command",
+                    "priority": "normal",
+                    "notes": "API returned empty, using fallback"
+                }
+            # Strip markdown code blocks if present
+            text = directive_text.strip()
+            if text.startswith("```"):
+                # Remove ```json ... ``` wrapper
+                lines_raw = text.split("\n")
+                lines_raw = [l for l in lines_raw if not l.strip().startswith("```")]
+                text = "\n".join(lines_raw)
+            directive = json.loads(text)
 
             # Validate required fields
             required = ["situation", "goal", "instructions"]
@@ -223,15 +229,22 @@ Respond with JSON only."""
             return directive
 
         except Exception as e:
-            error_directive = {
+            print(f"Director API error: {type(e).__name__}: {e}")
+            # Return last good directive if available
+            if self.last_directive:
+                return self.last_directive
+            return {
                 "situation": f"Director error: {str(e)}",
-                "goal": "Continue with last known objective",
-                "instructions": ["Continue previous action", "Press A to advance if stuck"],
-                "battle_plan": "Attack with strongest available option",
+                "goal": "Walk UP to explore and press A for dialog",
+                "instructions": [
+                    "Walk UP for 1-2 seconds to explore",
+                    "Press A if dialog or interaction prompt appears",
+                    "If stuck, try walking in a different direction"
+                ],
+                "battle_plan": "Use Fight command on enemies",
                 "priority": "normal",
-                "notes": f"Error occurred: {str(e)}"
+                "notes": f"Error: {str(e)}"
             }
-            return error_directive
 
     def format_for_pilot(self, directive=None):
         """Format the directive as a clear text block for the Pilot."""

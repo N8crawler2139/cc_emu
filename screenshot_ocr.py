@@ -41,31 +41,72 @@ class ScreenshotOCR:
             return False
     
     def capture_window(self, filename=None):
-        """Capture screenshot of BizHawk window"""
+        """Capture screenshot of BizHawk window.
+
+        Uses screen-region grab (ImageGrab) which works with hardware-
+        accelerated renderers like BizHawk's OpenGL/D3D output.
+        Falls back to PrintWindow API if grab fails.
+        """
         if not self.bizhawk_window:
             if not self.find_bizhawk_window():
                 return None
-                
+
         try:
-            # Get window dimensions
+            # Get window rect (screen coordinates)
+            # NOTE: Do NOT call SetForegroundWindow here -- it steals
+            # focus and can cause keyboard input to go to the BizHawk
+            # UI menus instead of the game.
+            rect = win32gui.GetWindowRect(self.bizhawk_window)
+            x, y, x1, y1 = rect
+
+            # Use ImageGrab to capture the screen region - works with
+            # hardware-accelerated renderers that BitBlt misses
+            im = ImageGrab.grab(bbox=(x, y, x1, y1))
+
+            # Check if the capture is mostly blank (all white/black)
+            # If so, try PrintWindow as fallback
+            pixels = list(im.getdata())
+            sample = pixels[:100]
+            avg_brightness = sum(sum(p[:3]) for p in sample) / (len(sample) * 3)
+            if avg_brightness > 250 or avg_brightness < 5:
+                # Likely a blank capture, try PrintWindow
+                im_alt = self._capture_printwindow()
+                if im_alt:
+                    im = im_alt
+
+            # Save to file if specified
+            if filename:
+                im.save(filename)
+                self.last_screenshot_path = filename
+
+            return im
+
+        except Exception as e:
+            print(f"Error capturing window: {e}")
+            return None
+
+    def _capture_printwindow(self):
+        """Fallback capture using PrintWindow API."""
+        try:
             rect = win32gui.GetWindowRect(self.bizhawk_window)
             x, y, x1, y1 = rect
             width = x1 - x
             height = y1 - y
-            
-            # Capture the window
+
             hwndDC = win32gui.GetWindowDC(self.bizhawk_window)
             mfcDC = win32ui.CreateDCFromHandle(hwndDC)
             saveDC = mfcDC.CreateCompatibleDC()
-            
+
             saveBitMap = win32ui.CreateBitmap()
             saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
             saveDC.SelectObject(saveBitMap)
-            
-            # Copy window content
-            saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
-            
-            # Convert to PIL Image
+
+            # Use PrintWindow instead of BitBlt - asks window to paint itself
+            import ctypes
+            ctypes.windll.user32.PrintWindow(
+                self.bizhawk_window, saveDC.GetSafeHdc(), 2  # PW_RENDERFULLCONTENT
+            )
+
             bmpinfo = saveBitMap.GetInfo()
             bmpstr = saveBitMap.GetBitmapBits(True)
             im = Image.frombuffer(
@@ -73,23 +114,15 @@ class ScreenshotOCR:
                 (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
                 bmpstr, 'raw', 'BGRX', 0, 1
             )
-            
-            # Save to file if specified
-            if filename:
-                im.save(filename)
-                self.last_screenshot_path = filename
-                print(f"Screenshot saved to: {filename}")
-            
-            # Cleanup
+
             win32gui.DeleteObject(saveBitMap.GetHandle())
             saveDC.DeleteDC()
             mfcDC.DeleteDC()
             win32gui.ReleaseDC(self.bizhawk_window, hwndDC)
-            
+
             return im
-            
         except Exception as e:
-            print(f"Error capturing window: {e}")
+            print(f"PrintWindow fallback failed: {e}")
             return None
     
     def perform_ocr(self, image, lang='eng'):

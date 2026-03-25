@@ -24,14 +24,13 @@ WALKTHROUGH = [
             "party_contains": ["Terra", "Wedge", "Vicks"],
             "notes": "Opening scene. Three Magitek armors walking toward Narshe."
         },
-        "objective": "Walk UP (north) through the snowfield toward Narshe. Direction is UP on the controller.",
+        "objective": "Walk UP (north) through the snowfield and into Narshe city.",
         "instructions": [
-            "Walk UP (north) along the path. UP means toward top of screen.",
-            "Keep pressing/holding UP. The path goes north to Narshe.",
+            "Walk UP (north) along the path. UP = toward top of screen.",
+            "Keep walking UP. Enter the city gate when you reach it.",
             "If dialog appears, press A to advance it.",
-            "Random encounters may happen. Use Fight command (press A).",
-            "The party is in Magitek armor - attacks are very powerful.",
-            "Keep walking UP until the scene changes or guards appear."
+            "Random encounters may happen. Just press A to attack.",
+            "The party is in Magitek armor - very powerful."
         ],
         "battle_strategy": {
             "default": "Press A to select Fight, then press A to confirm target. One-shots everything.",
@@ -319,13 +318,8 @@ def get_director_context(game_state):
 
     # General FF6 opening context (always included early game)
     if game_state and game_state.gold <= 3000:
-        lines.append("FF6 OPENING SEQUENCE REMINDER:")
-        lines.append("  1. Three Magitek armors (Terra, Wedge, Vicks) walk NORTH through snow to Narshe")
-        lines.append("  2. They fight guards at the Narshe gate")
-        lines.append("  3. Inside the mines, they find the frozen Esper")
-        lines.append("  4. Whelk boss fight near the Esper")
-        lines.append("  5. After Esper event, Terra wakes up alone")
-        lines.append("  DIRECTION: Walk UP to go north toward Narshe. UP = toward top of screen.")
+        lines.append("FF6 OPENING: Three Magitek armors walk NORTH (UP) through snow into Narshe.")
+        lines.append("  Walk UP to progress. Press A when dialog appears.")
         lines.append("")
 
     # Relevant character tips
