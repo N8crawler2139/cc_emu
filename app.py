@@ -13,6 +13,7 @@ from game_controller import FF3GameController
 from screenshot_ocr import ScreenshotOCR
 from ff6_game_state import FF6GameStateReader
 from ff6_actions import FF6Actions
+from ai_expert import get_expert, reset_expert
 
 app = Flask(__name__)
 
@@ -838,14 +839,71 @@ def action_heal():
     actions.heal_party()
     return jsonify({'success': True, 'message': 'Heal party attempted'})
 
+# --- Expert AI Endpoints ---
+
+@app.route('/ai/start', methods=['POST'])
+def ai_start():
+    """Start the Expert AI (Director + Pilot loop)."""
+    global bizhawk_controller
+    if not bizhawk_controller or not bizhawk_controller.is_connected():
+        return jsonify({'success': False, 'message': 'Not connected to BizHawk'})
+
+    expert = get_expert(bizhawk_controller)
+    if expert.is_running():
+        return jsonify({'success': False, 'message': 'AI is already running'})
+
+    success = expert.start()
+    return jsonify({
+        'success': success,
+        'message': 'Expert AI started' if success else 'Failed to start AI'
+    })
+
+@app.route('/ai/stop', methods=['POST'])
+def ai_stop():
+    """Stop the Expert AI."""
+    expert = get_expert()
+    if expert and expert.is_running():
+        expert.stop()
+        return jsonify({'success': True, 'message': 'Expert AI stopped'})
+    return jsonify({'success': True, 'message': 'AI was not running'})
+
+@app.route('/ai/status', methods=['GET'])
+def ai_status():
+    """Get Expert AI status and recent activity."""
+    expert = get_expert()
+    if expert:
+        return jsonify({'success': True, **expert.get_status()})
+    return jsonify({
+        'success': True,
+        'running': False,
+        'message': 'AI not initialized'
+    })
+
+@app.route('/ai/log', methods=['GET'])
+def ai_log():
+    """Get the AI activity log."""
+    expert = get_expert()
+    if expert:
+        count = int(request.args.get('count', 50))
+        return jsonify({
+            'success': True,
+            'log': [
+                f"[{e['level']}] {e['message']}"
+                for e in expert.log[-count:]
+            ]
+        })
+    return jsonify({'success': True, 'log': []})
+
 @app.route('/cleanup', methods=['POST'])
 def cleanup():
     """Clean up all resources"""
     global bizhawk_controller, game_controller, screenshot_ocr, is_running, ff6_actions
     
+    reset_expert()
+
     if bizhawk_controller:
         bizhawk_controller.cleanup()
-    
+
     bizhawk_controller = None
     game_controller = None
     screenshot_ocr = None
