@@ -301,7 +301,9 @@ def launch_bizhawk():
     global bizhawk_controller, game_controller, is_running
     
     try:
-        bizhawk_controller = BizHawkController()
+        data = request.get_json() if request.is_json else {}
+        load_slot = data.get('load_slot') if data else None
+        bizhawk_controller = BizHawkController(load_slot=load_slot)
         game_controller = FF3GameController(bizhawk_controller)
         
         success = bizhawk_controller.launch_bizhawk()

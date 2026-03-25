@@ -206,6 +206,11 @@ class FF6GameState:
         self.game_mode = raw_data.get("game_mode", 0)
         self.menu_flag = raw_data.get("menu_flag", 0)
         self.diag_bytes = raw_data.get("diag_bytes", [])
+        self.in_battle = raw_data.get("in_battle", False)
+        self.battle_phase = raw_data.get("battle_phase", 0)
+        self.battle_cursor = raw_data.get("battle_cursor", 0)
+        self.battle_menu = raw_data.get("battle_menu", 0)
+        self.battle_diag = raw_data.get("battle_diag", [])
         self.party_slots = raw_data.get("party_slots", [])
         self._raw = raw_data
 

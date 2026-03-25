@@ -79,6 +79,17 @@ local GAME_MODE_ADDR = 0x0004    -- Game mode byte
 local POS_X_ADDR = 0x00AF
 local POS_Y_ADDR = 0x00B0
 
+-- Battle system addresses
+local BATTLE_PHASE_ADDR = 0x0201   -- 0=not in battle, non-0=in battle
+local BATTLE_MENU_STATE = 0x0026   -- Current battle menu state
+local BATTLE_CURSOR_ADDR = 0x0028  -- Battle menu cursor position
+local ATB_READY_ADDR = 0x7B30     -- Which characters have ATB ready
+
+-- Battle command menu: which commands are available per character
+-- In Magitek battles, commands are MagiTek + Item
+-- In normal battles, depends on character
+local BATTLE_CMD_ADDR = 0x202E    -- Current active character's commands
+
 -- Timer (in-game clock)
 local TIMER_HOURS_ADDR = 0x1863
 local TIMER_MINS_ADDR = 0x1864
@@ -324,6 +335,22 @@ function write_game_state()
     -- Game context
     local game_mode, menu_flag, diag = read_game_context()
 
+    -- Battle state
+    local battle_phase = mainmemory.read_u8(BATTLE_PHASE_ADDR)
+    local battle_cursor = mainmemory.read_u8(BATTLE_CURSOR_ADDR)
+    local battle_menu = mainmemory.read_u8(BATTLE_MENU_STATE)
+    local in_battle = (battle_phase ~= 0)
+
+    -- Read a wider range of battle-related bytes for analysis
+    local battle_diag = {}
+    for i = 0, 15 do
+        battle_diag[i] = mainmemory.read_u8(0x0200 + i)
+    end
+    local battle_diag_parts = {}
+    for i = 0, 15 do
+        table.insert(battle_diag_parts, tostring(battle_diag[i]))
+    end
+
     -- Inventory
     local inv_items = read_inventory()
 
@@ -344,6 +371,11 @@ function write_game_state()
     json = json .. '  "game_mode": ' .. game_mode .. ',\n'
     json = json .. '  "menu_flag": ' .. menu_flag .. ',\n'
     json = json .. '  "diag_bytes": [' .. table.concat(diag_parts, ",") .. '],\n'
+    json = json .. '  "in_battle": ' .. (in_battle and "true" or "false") .. ',\n'
+    json = json .. '  "battle_phase": ' .. battle_phase .. ',\n'
+    json = json .. '  "battle_cursor": ' .. battle_cursor .. ',\n'
+    json = json .. '  "battle_menu": ' .. battle_menu .. ',\n'
+    json = json .. '  "battle_diag": [' .. table.concat(battle_diag_parts, ",") .. '],\n'
     json = json .. '  "party_slots": [' .. table.concat(party_json_parts, ",") .. '],\n'
     json = json .. '  "characters": [\n    ' .. table.concat(chars, ",\n    ") .. '\n  ],\n'
     json = json .. '  "inventory": [\n    ' .. table.concat(inv_items, ",\n    ") .. '\n  ]\n'

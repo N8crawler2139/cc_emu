@@ -12,7 +12,7 @@ from pathlib import Path
 from ff6_game_state import FF6GameStateReader
 
 class BizHawkControllerFile:
-    def __init__(self, bizhawk_path=None, rom_path=None, lua_script_path=None):
+    def __init__(self, bizhawk_path=None, rom_path=None, lua_script_path=None, load_slot=None):
         self.bizhawk_path = bizhawk_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\EmuHawk.exe"
         self.rom_path = rom_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\SNES\Final Fantasy III (USA).zip"
         self.lua_script_path = lua_script_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\Lua\bizhawk_gamestate_server.lua"
@@ -20,6 +20,7 @@ class BizHawkControllerFile:
         self.response_file = "bizhawk_responses.txt"
         self.process = None
         self.connected = False
+        self.load_slot = load_slot  # Quicksave slot to load on launch (1-10)
         self.game_state_reader = FF6GameStateReader()
         
     def launch_bizhawk(self):
@@ -37,11 +38,14 @@ class BizHawkControllerFile:
             # ROM must be LAST argument per BizHawk docs
             # Use our project dir as cwd so Lua file I/O lands here
             project_dir = os.path.dirname(os.path.abspath(__file__))
-            self.process = subprocess.Popen([
+            args = [
                 self.bizhawk_path,
                 "--lua", self.lua_script_path,
-                self.rom_path,
-            ], cwd=project_dir)
+            ]
+            if self.load_slot is not None:
+                args.extend(["--load-slot", str(self.load_slot)])
+            args.append(self.rom_path)
+            self.process = subprocess.Popen(args, cwd=project_dir)
             
             # Wait a moment for BizHawk to start
             print("Waiting for BizHawk to start...")

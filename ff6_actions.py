@@ -327,9 +327,10 @@ class FF6Actions:
         return True
 
     def battle_magic(self, spell_index=0):
-        """Select Magic command and cast a spell."""
-        # Navigate to Magic command (usually slot 2)
-        self._press("Down")
+        """Select Magic/MagiTek command and cast a spell.
+        In Magitek battles, MagiTek is the first option - just press A.
+        """
+        # Select first command (Fight/MagiTek) - do NOT press Down
         self._press("A")
         time.sleep(self.CONFIRM_DELAY)
 

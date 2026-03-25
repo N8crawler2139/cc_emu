@@ -82,7 +82,12 @@ class AIPilot:
         if not state:
             return "Game state unavailable", None
 
+        # Detect if we're likely in battle
+        in_battle = self._detect_battle(state)
+
         lines = []
+        if in_battle:
+            lines.append("*** IN BATTLE ***")
         lines.append(f"Map:{state.map_id} Pos:({state.position['x']},{state.position['y']}) "
                       f"Mode:{state.game_mode} Menu:{state.menu_flag}")
         lines.append(f"Gold:{state.gold}")
@@ -96,6 +101,19 @@ class AIPilot:
             lines.append(f"Items: {item_str}")
 
         return "\n".join(lines), state
+
+    def _detect_battle(self, state):
+        """Detect if we're in battle.
+
+        The $0201 battle_phase flag is unreliable. Instead use:
+        - position.x == 0 (field always has x > 0, battle screen uses x=0)
+        - battle_menu > 0 (menu is active in battle)
+        """
+        if not state:
+            return False
+        x = state.position.get('x', -1)
+        menu = getattr(state, 'battle_menu', 0)
+        return x == 0 or menu > 0
 
     def _check_stuck(self, state):
         """Detect if we're stuck (position hasn't changed for multiple actions)."""
@@ -128,6 +146,28 @@ class AIPilot:
         """
         state_text, state = self._get_state_summary()
         is_stuck = self._check_stuck(state)
+        in_battle = self._detect_battle(state) if state else False
+
+        # BATTLE OVERRIDE: Use memory to handle battles deterministically.
+        # No LLM needed -- read menu state and press the right button.
+        if in_battle:
+            battle_menu = getattr(state, 'battle_menu', 0)
+            if battle_menu > 0:
+                # A menu is active (command/spell/target selection).
+                # Press A to confirm the first option which is always
+                # Fight or MagiTek -- the cursor starts there.
+                return {
+                    "action": "press",
+                    "params": {"button": "A"},
+                    "reasoning": f"Battle menu active (menu={battle_menu}), pressing A"
+                }
+            else:
+                # Animation playing or waiting for ATB. Just wait briefly.
+                return {
+                    "action": "wait",
+                    "params": {"seconds": 0.3},
+                    "reasoning": "Battle animation playing, waiting"
+                }
 
         stuck_note = ""
         if is_stuck:
