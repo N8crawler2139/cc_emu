@@ -54,9 +54,11 @@ class FF6Agent:
         self.current_state = GameState.UNKNOWN
         self.prev_state = GameState.UNKNOWN
         self.prev_position = None
+        self.prev_map = None
         self.stuck_count = 0
         self.action_count = 0
         self.battles_won = 0
+        self.maps_visited = set()
         self.state_history = []
 
         # Field navigation: default direction to walk
@@ -175,11 +177,39 @@ class FF6Agent:
         self.ctrl.hold_button(self.walk_direction, duration=0.5)
         time.sleep(0.3)
 
+    def _party_needs_healing(self, data):
+        """Check if any party member has critically low HP."""
+        for char in data.get("characters", []):
+            hp = char.get("hp", 0)
+            hp_max = char.get("hp_max", 1)
+            if hp_max > 0 and hp > 0 and (hp / hp_max) < 0.25:
+                return True
+        return False
+
     def handle_battle_menu(self, data):
-        """Handle battle with active menu: press A to select first option."""
+        """Handle battle with active menu.
+
+        Default: press A (selects first command = MagiTek/Fight, first attack, first target).
+        If party HP is critical, navigate to Heal Force instead:
+          In MagiTek submenu, Heal Force is the 4th option (Down, Down, Down from Fire Beam).
+        """
         battle_menu = data.get("battle_menu", 0)
-        self._log(f"Battle: menu active (menu={battle_menu}), press A")
-        self._press("A", self.BATTLE_PRESS_DELAY)
+        needs_heal = self._party_needs_healing(data)
+
+        if needs_heal and battle_menu in (5, 6, 7):
+            # battle_menu 5-7 appears to be the MagiTek spell submenu
+            # Navigate to Heal Force: Down Down Down A (4th option)
+            self._log(f"Battle: HP critical! Selecting Heal Force (menu={battle_menu})")
+            self._press("Down", 0.1)
+            self._press("Down", 0.1)
+            self._press("Down", 0.1)
+            self._press("A", self.BATTLE_PRESS_DELAY)
+            # Select party member target (press A for self)
+            time.sleep(0.2)
+            self._press("A", self.BATTLE_PRESS_DELAY)
+        else:
+            self._log(f"Battle: menu active (menu={battle_menu}), press A")
+            self._press("A", self.BATTLE_PRESS_DELAY)
 
     def handle_battle_animating(self, data):
         """Handle battle animation: wait briefly."""
@@ -206,6 +236,13 @@ class FF6Agent:
                and state == GameState.FIELD:
                 self.battles_won += 1
                 self._log(f"*** BATTLE WON (total: {self.battles_won}) ***")
+
+        # Track map changes
+        current_map = data.get("map_id") if data else None
+        if current_map and current_map != self.prev_map and current_map > 0:
+            self._log(f"*** MAP CHANGE: {self.prev_map} -> {current_map} ***")
+            self.maps_visited.add(current_map)
+            self.prev_map = current_map
 
         # Dispatch to handler
         if state == GameState.FIELD:
@@ -254,6 +291,13 @@ class FF6Agent:
 
     def get_status(self):
         """Get agent status for monitoring."""
+        # Get current party HP
+        data = self._read_state()
+        party_hp = []
+        if data:
+            for c in data.get("characters", []):
+                party_hp.append(f"{c.get('name','?')}:{c.get('hp',0)}/{c.get('hp_max',0)}")
+
         return {
             "running": self.running,
             "state": self.current_state,
@@ -262,6 +306,9 @@ class FF6Agent:
             "walk_direction": self.walk_direction,
             "walk_goal": self.walk_goal,
             "stuck_count": self.stuck_count,
+            "maps_visited": sorted(self.maps_visited),
+            "current_map": self.prev_map,
+            "party_hp": party_hp,
             "recent_log": [e["msg"] for e in self.log[-20:]],
         }
 
