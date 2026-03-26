@@ -846,46 +846,46 @@ def action_heal():
 
 @app.route('/agent/start', methods=['POST'])
 def agent_start():
-    """Start the unified game agent."""
+    """Enable the Lua agent (all gameplay logic runs in Lua)."""
     global bizhawk_controller
     if not bizhawk_controller or not bizhawk_controller.is_connected():
         return jsonify({'success': False, 'message': 'Not connected to BizHawk'})
-    agent = get_agent(bizhawk_controller)
-    if agent.running:
-        return jsonify({'success': False, 'message': 'Agent already running'})
     data = request.get_json() if request.is_json else {}
     direction = data.get('direction', 'Up')
-    agent.walk_direction = direction
-    agent.start()
-    return jsonify({'success': True, 'message': f'Agent started (walking {direction})'})
+    bizhawk_controller.set_walk_direction(direction)
+    result = bizhawk_controller.agent_on()
+    return jsonify({'success': True, 'message': f'Lua agent enabled (walking {direction})', 'response': result})
 
 @app.route('/agent/stop', methods=['POST'])
 def agent_stop():
-    """Stop the unified game agent."""
-    agent = get_agent()
-    if agent and agent.running:
-        agent.stop()
-        return jsonify({'success': True, 'message': 'Agent stopped'})
-    return jsonify({'success': True, 'message': 'Agent not running'})
+    """Disable the Lua agent."""
+    global bizhawk_controller
+    if bizhawk_controller and bizhawk_controller.is_connected():
+        result = bizhawk_controller.agent_off()
+        return jsonify({'success': True, 'message': 'Lua agent disabled', 'response': result})
+    return jsonify({'success': True, 'message': 'Not connected'})
 
 @app.route('/agent/status', methods=['GET'])
 def agent_status():
-    """Get agent status."""
-    agent = get_agent()
-    if agent:
-        return jsonify({'success': True, **agent.get_status()})
-    return jsonify({'success': True, 'running': False, 'message': 'Agent not initialized'})
+    """Get agent status from game state JSON (written by Lua)."""
+    try:
+        import json as json_mod
+        with open('bizhawk_gamestate.json') as f:
+            data = json_mod.load(f)
+        return jsonify({'success': True, **data})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/agent/direction', methods=['POST'])
 def agent_direction():
-    """Set the agent's walk direction."""
-    agent = get_agent()
-    if not agent:
-        return jsonify({'success': False, 'message': 'Agent not initialized'})
+    """Set the Lua agent's walk direction."""
+    global bizhawk_controller
+    if not bizhawk_controller or not bizhawk_controller.is_connected():
+        return jsonify({'success': False, 'message': 'Not connected'})
     data = request.get_json() or {}
     direction = data.get('direction', 'Up')
-    agent.walk_direction = direction
-    return jsonify({'success': True, 'message': f'Direction set to {direction}'})
+    result = bizhawk_controller.set_walk_direction(direction)
+    return jsonify({'success': True, 'message': f'Direction set to {direction}', 'response': result})
 
 # --- Expert AI Endpoints ---
 

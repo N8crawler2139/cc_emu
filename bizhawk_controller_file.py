@@ -15,7 +15,7 @@ class BizHawkControllerFile:
     def __init__(self, bizhawk_path=None, rom_path=None, lua_script_path=None, load_slot=None):
         self.bizhawk_path = bizhawk_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\EmuHawk.exe"
         self.rom_path = rom_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\SNES\Final Fantasy III (USA).zip"
-        self.lua_script_path = lua_script_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\Lua\bizhawk_gamestate_server.lua"
+        self.lua_script_path = lua_script_path or r"C:\Users\Admin\anaconda3\envs\CC_Emu\Bizhawk\Lua\ff6_agent.lua"
         self.command_file = "bizhawk_commands.txt"
         self.response_file = "bizhawk_responses.txt"
         self.process = None
@@ -347,6 +347,23 @@ class BizHawkControllerFile:
             values_str = response[4:]
             return [int(v) for v in values_str.split(",")]
         return None
+
+    # --- High-level agent commands (Lua handles execution) ---
+
+    def agent_on(self):
+        """Enable the Lua agent (autonomous play)."""
+        self._send_command("AGENT ON")
+        return self._receive_response(timeout=2)
+
+    def agent_off(self):
+        """Disable the Lua agent (manual control)."""
+        self._send_command("AGENT OFF")
+        return self._receive_response(timeout=2)
+
+    def set_walk_direction(self, direction):
+        """Set the agent's walk direction (Up/Down/Left/Right)."""
+        self._send_command(f"WALK {direction}")
+        return self._receive_response(timeout=2)
     
     def get_status(self):
         """Get emulator status"""
