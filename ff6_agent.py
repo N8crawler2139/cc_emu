@@ -234,38 +234,36 @@ class FF6Agent:
 
         if self.stuck_count > 3:
             # Probably in dialog or blocked by obstacle
-            if self.stuck_count <= 6:
-                # First: try pressing A (dialog advance)
+            if self.stuck_count <= 5:
+                # First: try pressing A (might be dialog)
                 self._log(f"Stuck at {current_pos} ({self.stuck_count}x), pressing A")
                 self._press("A", self.DIALOG_PRESS_DELAY)
-            elif self.stuck_count <= 10:
-                # Then: try pressing B (exit menu)
+            elif self.stuck_count <= 8:
+                # Try B (might be in a menu overlay)
                 self._log(f"Still stuck ({self.stuck_count}x), pressing B")
                 self._press("B", self.DIALOG_PRESS_DELAY)
-            elif self.stuck_count <= 15:
-                # Try alternate directions to get around obstacles
-                alt_dirs = ["Left", "Right", "Up", "Left", "Right"]
-                idx = (self.stuck_count - 11) % len(alt_dirs)
-                alt_dir = alt_dirs[idx]
-                self._log(f"Obstacle? Trying {alt_dir} ({self.stuck_count}x)")
-                self.ctrl.hold_button(alt_dir, duration=0.5)
-                time.sleep(0.3)
-            elif self.stuck_count <= 25:
-                # Ask vision for help -- take screenshot, ask LLM
+            elif self.stuck_count <= 12:
+                # Try ALL four directions systematically to find a path
+                all_dirs = ["Right", "Left", "Down", "Up"]
+                idx = (self.stuck_count - 9) % len(all_dirs)
+                alt_dir = all_dirs[idx]
+                self._log(f"Trying {alt_dir} to find path ({self.stuck_count}x)")
+                self.ctrl.hold_button(alt_dir, duration=1.0)
+                time.sleep(0.5)
+            elif self.stuck_count == 13:
+                # Ask vision for help
                 vision_dir = self.ask_vision_for_direction()
                 if vision_dir:
-                    self._log(f"*** VISION ASSIST: walk {vision_dir} ***")
+                    self._log(f"*** VISION: walk {vision_dir} ***")
                     self.walk_direction = vision_dir
-                    self.stuck_count = 0  # Reset and try new direction
+                    self.stuck_count = 0
                 else:
-                    # Vision didn't help, keep trying alternates
-                    alt_dirs = ["Down", "Left", "Right", "Up"]
-                    idx = (self.stuck_count - 16) % len(alt_dirs)
-                    self.ctrl.hold_button(alt_dirs[idx], duration=0.8)
-                    time.sleep(0.3)
+                    self._log("Vision no answer, trying Down")
+                    self.walk_direction = "Down"
+                    self.stuck_count = 0
             else:
-                # Full reset
-                self._log(f"Resetting stuck counter, back to {self.walk_direction}")
+                # Keep trying with current direction
+                self._log(f"Resetting stuck counter")
                 self.stuck_count = 0
             return
 
@@ -274,14 +272,17 @@ class FF6Agent:
         self.ctrl.hold_button(self.walk_direction, duration=0.5)
         time.sleep(0.3)
 
-    def _party_needs_healing(self, data):
-        """Check if any party member has critically low HP."""
+    def _get_battle_strategy(self, data):
+        """Decide what to do this turn based on party HP.
+
+        Returns "heal" if any alive character is below 30% HP, else "attack".
+        """
         for char in data.get("characters", []):
             hp = char.get("hp", 0)
             hp_max = char.get("hp_max", 1)
-            if hp_max > 0 and hp > 0 and (hp / hp_max) < 0.25:
-                return True
-        return False
+            if hp_max > 0 and hp > 0 and (hp / hp_max) < 0.30:
+                return "heal"
+        return "attack"
 
     def _get_hp_hash(self, data):
         """Get a hash of all party HP values to detect battle progress."""
@@ -290,38 +291,72 @@ class FF6Agent:
             hp_vals.append(c.get("hp", 0))
         return tuple(hp_vals)
 
-    def handle_battle_menu(self, data):
-        """Handle battle with active menu.
+    def _execute_attack_turn(self):
+        """Execute a full MagiTek attack turn.
 
-        Key insight: if we press A and nothing changes for many cycles,
-        we're probably stuck in a submenu (like empty Item list).
-        Press B to back out and try again.
+        MagiTek battle menu: [MagiTek, Item] (or [MagiTek, Magic, Item])
+        MagiTek submenu: [Fire Beam, Bolt Beam, Ice Beam, Heal Force]
+
+        Sequence: A (MagiTek) -> A (Fire Beam) -> A (first enemy)
         """
-        battle_menu = data.get("battle_menu", 0)
+        self._press("A", 0.35)  # Select first command (MagiTek)
+        self._press("A", 0.35)  # Select first spell (Fire Beam)
+        self._press("A", 0.35)  # Select first target (enemy)
+
+    def _execute_heal_turn(self):
+        """Execute a full Heal Force turn.
+
+        MagiTek submenu order: Fire Beam, Bolt Beam, Ice Beam, Heal Force
+        So Heal Force = 3x Down from the top.
+
+        Sequence: A (MagiTek) -> Down Down Down -> A (Heal Force) -> A (target ally)
+        """
+        self._press("A", 0.35)     # Select MagiTek
+        self._press("Down", 0.12)  # Past Fire Beam
+        self._press("Down", 0.12)  # Past Bolt Beam
+        self._press("Down", 0.12)  # Past Ice Beam -> Heal Force
+        self._press("A", 0.35)     # Select Heal Force
+        self._press("A", 0.35)     # Target (first ally)
+
+    def handle_battle_menu(self, data):
+        """Handle battle with STRATEGIC turn execution.
+
+        Reads party HP to decide attack or heal, then executes
+        a complete turn sequence. Waits after each turn for the
+        next character's ATB.
+        """
         self.battle_action_count += 1
 
-        # Check if HP has changed since last check
+        # Stuck detection: if HP hasn't changed in many turns, we're
+        # probably stuck in a wrong submenu. Press B to escape.
         hp_hash = self._get_hp_hash(data)
         if hp_hash == self.battle_last_hp_hash:
-            # No damage dealt or received
-            if self.battle_action_count > 20:
-                # Stuck in battle for 20+ actions with no progress
-                # Press B to back out of whatever submenu we're in
-                self._log(f"Battle stuck ({self.battle_action_count} actions, no damage)! Pressing B to back out")
-                self._press("B", self.BATTLE_PRESS_DELAY)
-                self.battle_action_count = 0  # Reset counter
+            if self.battle_action_count > 8:
+                self._log(f"Battle stuck! B to escape submenu")
+                self._press("B", 0.2)
+                self._press("B", 0.2)
+                self.battle_action_count = 0
                 return
         else:
-            # Progress! Reset counter
             self.battle_action_count = 0
             self.battle_last_hp_hash = hp_hash
 
-        # Simple approach that actually works: press A.
-        # If no progress after 20 actions, press B to escape submenus.
-        # The A-mash cycles through: command select -> spell/attack -> target.
-        # It occasionally selects Item by accident, but the B-escape catches it.
-        self._log(f"Battle: press A (menu={battle_menu}, actions={self.battle_action_count})")
-        self._press("A", self.BATTLE_PRESS_DELAY)
+        # Strategic decision based on party state
+        strategy = self._get_battle_strategy(data)
+
+        if strategy == "heal":
+            hp_info = ", ".join(
+                f"{c.get('name','?')}:{c.get('hp',0)}/{c.get('hp_max',0)}"
+                for c in data.get("characters", [])
+            )
+            self._log(f"Battle: HEAL turn ({hp_info})")
+            self._execute_heal_turn()
+        else:
+            self._log(f"Battle: ATTACK turn")
+            self._execute_attack_turn()
+
+        # Wait for attack animation + next ATB fill
+        time.sleep(1.5)
 
     def handle_battle_animating(self, data):
         """Handle battle animation: wait briefly."""
