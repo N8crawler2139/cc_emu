@@ -50,6 +50,7 @@ class FF6AIBrain:
         # State
         self.battles_won = 0
         self.total_decisions = 0
+        self._heal_attempts = 0  # Prevents infinite heal loops
         self.log = []
         self.max_log = 200
 
@@ -91,22 +92,26 @@ class FF6AIBrain:
     def decide_battle_action(self, state):
         """Decide battle action based on party state.
 
-        For Magitek battles, this is simple deterministic logic:
-        - If any character below 40% HP -> HealForce on them
+        For Magitek battles:
+        - If any character below 30% HP AND heal hasn't been tried too many
+          times in a row -> HealForce on them
         - Otherwise -> BoltBeam (strongest attack)
-
-        The LLM will be used for more complex decisions later
-        (non-Magitek battles, boss strategies, etc.)
         """
         self.total_decisions += 1
         chars = state.get("characters", [])
 
-        # Check for characters needing healing
-        for i, c in enumerate(chars):
-            hp = c.get("hp", 0)
-            hp_max = c.get("hp_max", 1)
-            if hp_max > 0 and hp > 0 and (hp / hp_max) < 0.40:
-                return f"MagiTek HealForce ally {i}"
+        # Check for characters needing healing (only if we haven't been
+        # stuck trying to heal for too long)
+        if self._heal_attempts < 3:
+            for i, c in enumerate(chars):
+                hp = c.get("hp", 0)
+                hp_max = c.get("hp_max", 1)
+                if hp_max > 0 and hp > 0 and (hp / hp_max) < 0.30:
+                    self._heal_attempts += 1
+                    return f"MagiTek HealForce ally {i}"
+
+        # Reset heal counter when we attack
+        self._heal_attempts = 0
 
         # Default: BoltBeam (strongest Magitek attack)
         return "MagiTek BoltBeam enemy 0"
@@ -178,6 +183,7 @@ class FF6AIBrain:
                     self._log("*** BATTLE START ***")
                 elif not in_battle and last_battle_state:
                     self.battles_won += 1
+                    self._heal_attempts = 0
                     self._log(f"*** BATTLE WON #{self.battles_won} ***")
                 last_battle_state = in_battle
 
