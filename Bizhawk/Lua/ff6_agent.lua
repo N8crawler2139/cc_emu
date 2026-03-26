@@ -1,14 +1,17 @@
--- FF6 Lua-First Agent
--- ALL gameplay logic runs here with frame-perfect timing.
--- Python only sends high-level commands (WALK, AGENT ON/OFF).
+-- FF6 Lua-First Agent v2
+-- Battle Command Framework: AI says WHAT to do, Lua handles HOW.
 --
--- The agent is a state machine:
---   FIELD:  Walk in commanded direction, press A for NPCs/dialog
---   BATTLE: Execute full attack/heal turns with frame-perfect timing
---   DIALOG: Press A to advance text
---   IDLE:   Do nothing (manual control or waiting for Python)
+-- Battle commands are strings like:
+--   "MagiTek FireBeam enemy"      -> navigate to MagiTek, select Fire Beam, target enemy
+--   "MagiTek HealForce ally"      -> navigate to MagiTek, select Heal Force, target ally
+--   "Fight enemy"                 -> select Fight, target enemy
+--   "Magic Cure2 ally 2"          -> select Magic, find Cure2, target ally slot 2
+--   "Item Potion ally 1"          -> select Item, find Potion, target ally slot 1
+--
+-- The framework reads command slot positions from RAM so it knows
+-- exactly how many Down presses to reach each command.
 
-print("=== FF6 Lua Agent ===")
+print("=== FF6 Lua Agent v2 - Battle Command Framework ===")
 
 -----------------------------------------------------------------------
 -- CONFIG
@@ -18,10 +21,9 @@ local COMMAND_FILE = PROJECT_DIR .. "bizhawk_commands.txt"
 local RESPONSE_FILE = PROJECT_DIR .. "bizhawk_responses.txt"
 local GAMESTATE_FILE = PROJECT_DIR .. "bizhawk_gamestate.json"
 
-local GAMESTATE_INTERVAL = 30   -- Write JSON every 30 frames
-local BATTLE_TURN_COOLDOWN = 90 -- Frames between battle turn attempts
-local WALK_FRAMES = 30          -- Frames to hold direction when walking
-local DIALOG_PRESS_INTERVAL = 20 -- Frames between A presses in dialog
+local GAMESTATE_INTERVAL = 30
+local BATTLE_TURN_COOLDOWN = 90
+local WALK_FRAMES = 30
 
 -----------------------------------------------------------------------
 -- MEMORY ADDRESSES
@@ -33,42 +35,76 @@ local POS_X_ADDR = 0x00AF
 local POS_Y_ADDR = 0x00B0
 local GOLD_ADDR = 0x1860
 
--- Character offsets
-local OFF_HP     = 0x09
-local OFF_HP_MAX = 0x0B
-local OFF_MP     = 0x0D
-local OFF_MP_MAX = 0x0F
-local OFF_LEVEL  = 0x08
-local OFF_ACTOR  = 0x00
-local OFF_NAME   = 0x02
-local OFF_STATUS1 = 0x14
+-- Character data offsets (within each 37-byte block)
+local OFF = {
+    ACTOR   = 0x00,
+    NAME    = 0x02,  -- 6 bytes
+    LEVEL   = 0x08,
+    HP      = 0x09,  -- 16-bit LE
+    HP_MAX  = 0x0B,
+    MP      = 0x0D,
+    MP_MAX  = 0x0F,
+    STATUS1 = 0x14,
+    CMD1    = 0x16,  -- 4 command slots
+    CMD2    = 0x17,
+    CMD3    = 0x18,
+    CMD4    = 0x19,
+}
+
+-----------------------------------------------------------------------
+-- COMMAND ID LOOKUP
+-- Maps command IDs from RAM to names
+-----------------------------------------------------------------------
+local CMD_NAMES = {
+    [0] = "Fight",  [1] = "Item",    [2] = "Magic",   [3] = "Morph",
+    [4] = "Revert", [5] = "Steal",   [6] = "Capture", [7] = "SwdTech",
+    [8] = "Throw",  [9] = "Tools",   [10] = "Blitz",  [11] = "Runic",
+    [12] = "Lore",  [13] = "Sketch", [14] = "Control", [15] = "Slot",
+    [16] = "Rage",  [17] = "Leap",   [18] = "Mimic",  [19] = "Dance",
+    [20] = "Row",   [21] = "Def",    [22] = "Jump",   [23] = "XMagic",
+    [24] = "GPRain", [25] = "Summon", [26] = "Health", [27] = "Shock",
+    [28] = "Possess", [29] = "MagiTek",
+}
+
+-----------------------------------------------------------------------
+-- MAGITEK SPELL GRID (2x2)
+-- Position: [row][col] from top-left (0,0)
+-----------------------------------------------------------------------
+local MAGITEK_GRID = {
+    FireBeam  = {row = 0, col = 0},
+    BoltBeam  = {row = 0, col = 1},
+    IceBeam   = {row = 1, col = 0},
+    HealForce = {row = 1, col = 1},
+}
 
 -----------------------------------------------------------------------
 -- STATE
 -----------------------------------------------------------------------
-local agent_enabled = true  -- Agent autonomous mode
-local walk_direction = "Up" -- Current walk direction
+local agent_enabled = true
+local walk_direction = "Up"
 local frame_count = 0
 local running = true
 
--- Battle state
+-- Battle
 local in_battle = false
 local battle_turn_timer = 0
 local last_battle_hp = ""
 local battle_stuck_count = 0
 local battles_won = 0
+local pending_battle_cmd = nil  -- Command from Python: "MagiTek BoltBeam enemy"
 
--- Field state
+-- Field / Exploration
 local last_field_pos = ""
 local field_stuck_count = 0
-local walk_timer = 0
-
--- Dialog state
-local dialog_timer = 0
+local explore_dir_index = 1
+local EXPLORE_DIRS = {"Up", "Right", "Up", "Left", "Up", "Down", "Right", "Up", "Left", "Down"}
+local last_map_for_explore = -1
+local visited_positions = {}
 
 -- Stats
 local agent_state = "idle"
 local maps_visited = {}
+local last_battle_action = ""
 
 -----------------------------------------------------------------------
 -- HELPERS
@@ -87,28 +123,39 @@ function get_pos_y() return mainmemory.read_u8(POS_Y_ADDR) end
 function get_map_id() return read_u16(MAP_ID_ADDR) end
 function get_gold() return read_u24(GOLD_ADDR) end
 
-function get_char_hp(char_index)
-    local base = CHAR_BASE + (char_index * CHAR_SIZE)
-    return read_u16(base + OFF_HP)
+function get_char_field(char_index, offset)
+    return mainmemory.read_u8(CHAR_BASE + (char_index * CHAR_SIZE) + offset)
 end
 
-function get_char_hp_max(char_index)
-    local base = CHAR_BASE + (char_index * CHAR_SIZE)
-    return read_u16(base + OFF_HP_MAX)
+function get_char_hp(ci)     return read_u16(CHAR_BASE + ci * CHAR_SIZE + OFF.HP) end
+function get_char_hp_max(ci) return read_u16(CHAR_BASE + ci * CHAR_SIZE + OFF.HP_MAX) end
+function get_char_mp(ci)     return read_u16(CHAR_BASE + ci * CHAR_SIZE + OFF.MP) end
+function get_char_mp_max(ci) return read_u16(CHAR_BASE + ci * CHAR_SIZE + OFF.MP_MAX) end
+function get_char_level(ci)  return mainmemory.read_u8(CHAR_BASE + ci * CHAR_SIZE + OFF.LEVEL) end
+
+-- Read a character's 4 battle command IDs
+function get_char_commands(ci)
+    local base = CHAR_BASE + ci * CHAR_SIZE
+    return {
+        mainmemory.read_u8(base + OFF.CMD1),
+        mainmemory.read_u8(base + OFF.CMD2),
+        mainmemory.read_u8(base + OFF.CMD3),
+        mainmemory.read_u8(base + OFF.CMD4),
+    }
 end
 
-function get_char_level(char_index)
-    return mainmemory.read_u8(CHAR_BASE + (char_index * CHAR_SIZE) + OFF_LEVEL)
+-- Get HP hash for stuck detection
+function get_hp_hash()
+    local parts = {}
+    for _, ci in ipairs({0, 14, 15}) do
+        table.insert(parts, tostring(get_char_hp(ci)))
+    end
+    return table.concat(parts, ",")
 end
 
-function get_char_actor_id(char_index)
-    return mainmemory.read_u8(CHAR_BASE + (char_index * CHAR_SIZE) + OFF_ACTOR)
-end
-
--- Check if any party character is below threshold HP %
+-- Check if any party member needs healing
 function party_needs_healing(threshold)
-    -- Check first 3 character slots (typical party size in opening)
-    for _, ci in ipairs({0, 14, 15}) do  -- Terra=0, Wedge=14, Vicks=15
+    for _, ci in ipairs({0, 14, 15}) do
         local hp = get_char_hp(ci)
         local hp_max = get_char_hp_max(ci)
         if hp_max > 0 and hp > 0 and (hp / hp_max) < threshold then
@@ -118,16 +165,27 @@ function party_needs_healing(threshold)
     return false
 end
 
--- Get a string hash of party HP for stuck detection
-function get_hp_hash()
-    local parts = {}
+-- Get the lowest HP party member index
+function get_weakest_party_member()
+    local lowest_pct = 1.0
+    local lowest_ci = 0
     for _, ci in ipairs({0, 14, 15}) do
-        table.insert(parts, tostring(get_char_hp(ci)))
+        local hp = get_char_hp(ci)
+        local hp_max = get_char_hp_max(ci)
+        if hp_max > 0 and hp > 0 then
+            local pct = hp / hp_max
+            if pct < lowest_pct then
+                lowest_pct = pct
+                lowest_ci = ci
+            end
+        end
     end
-    return table.concat(parts, ",")
+    return lowest_ci, lowest_pct
 end
 
--- Press a button for N frames (frame-perfect, no file I/O)
+-----------------------------------------------------------------------
+-- FRAME-PERFECT INPUT
+-----------------------------------------------------------------------
 function press_button(button, frames)
     frames = frames or 6
     local input = {}
@@ -137,13 +195,11 @@ function press_button(button, frames)
         emu.frameadvance()
         frame_count = frame_count + 1
     end
-    -- Release
     joypad.set({}, 1)
     emu.frameadvance()
     frame_count = frame_count + 1
 end
 
--- Hold a direction for N frames
 function hold_direction(dir, frames)
     local input = {}
     input[dir] = true
@@ -155,7 +211,6 @@ function hold_direction(dir, frames)
     joypad.set({}, 1)
 end
 
--- Wait N frames (just advance without input)
 function wait_frames(n)
     for f = 1, n do
         emu.frameadvance()
@@ -164,68 +219,185 @@ function wait_frames(n)
 end
 
 -----------------------------------------------------------------------
--- STATE DETECTION
+-- GRID NAVIGATION
+-- Navigate from (0,0) to (target_row, target_col) in a 2D menu grid
 -----------------------------------------------------------------------
-function detect_game_state()
-    local x = get_pos_x()
-    local y = get_pos_y()
+function navigate_grid(target_row, target_col)
+    -- Press Down for each row (8 frames per press, 8 frame gap)
+    for r = 1, target_row do
+        press_button("Down", 8)
+        wait_frames(8)
+    end
+    -- Press Right for each column
+    for c = 1, target_col do
+        press_button("Right", 8)
+        wait_frames(8)
+    end
+end
 
-    -- Battle: position x == 0 during battle screens
-    if x == 0 then
-        return "battle"
+-----------------------------------------------------------------------
+-- BATTLE COMMAND FRAMEWORK
+-----------------------------------------------------------------------
+
+-- Find which menu slot (0-based) a command name is in for the active character.
+-- In Magitek mode, the commands are different from what RAM says.
+-- For now, handle MagiTek specially since it replaces Fight.
+function find_command_slot(command_name)
+    -- In Magitek battles, the menu is:
+    --   Slot 0: MagiTek (replaces Fight)
+    --   Slot 1: Magic (if character has it, e.g. Terra)
+    --   Last slot: Item
+    -- Non-empty slots only show.
+    --
+    -- We can read the character's commands from RAM, but Magitek mode
+    -- overrides command 0 (Fight -> MagiTek). The status1 byte has
+    -- bit 0x08 = Magitek flag.
+
+    local cmd_lower = command_name:lower()
+
+    if cmd_lower == "magitek" then
+        return 0  -- Always first slot in Magitek mode
+    elseif cmd_lower == "fight" then
+        return 0  -- Always first slot in normal mode
+    elseif cmd_lower == "item" then
+        -- Item is always the LAST command slot
+        -- Count non-empty commands to find position
+        -- For Magitek mode: usually slot 1 (2 commands: MagiTek, Item)
+        -- For Terra: slot 2 (3 commands: MagiTek, Magic, Item)
+        -- Safe default: try slot 1 for now
+        return 1
+    elseif cmd_lower == "magic" then
+        -- Magic is slot 1 in normal mode (Fight, Magic, ..., Item)
+        return 1
     end
 
-    -- Field: normal gameplay with movement
-    return "field"
+    return 0  -- Default to first slot
 end
 
------------------------------------------------------------------------
--- BATTLE LOGIC (frame-perfect, all in Lua)
------------------------------------------------------------------------
-function execute_attack_turn()
-    -- Full MagiTek attack: A (command) -> wait -> A (spell) -> wait -> A (target)
-    -- In Magitek menu: first command = MagiTek, first spell = Fire Beam
-    print("  BATTLE: Attack turn")
-    press_button("A", 6)    -- Select MagiTek (first command)
-    wait_frames(15)          -- Wait for submenu to open
-    press_button("A", 6)    -- Select Fire Beam (first spell)
-    wait_frames(15)          -- Wait for target select
-    press_button("A", 6)    -- Select first target
-end
+-- Execute a complete battle command with frame-perfect timing.
+-- cmd_name:    "MagiTek", "Fight", "Magic", "Item"
+-- spell_name:  For MagiTek: "FireBeam", "BoltBeam", "IceBeam", "HealForce"
+--              For Magic: spell name (TODO)
+--              For Fight/Item: nil
+-- target_type: "enemy" or "ally"
+-- target_slot: 0-based index (which enemy/ally, default 0)
+function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
+    target_type = target_type or "enemy"
+    target_slot = target_slot or 0
 
-function execute_heal_turn()
-    -- Heal Force: A (MagiTek) -> Down Down Down (to Heal Force) -> A -> A (target)
-    print("  BATTLE: Heal turn")
-    press_button("A", 6)       -- Select MagiTek
-    wait_frames(15)             -- Wait for submenu
-    press_button("Down", 4)    -- Past Fire Beam
-    wait_frames(3)
-    press_button("Down", 4)    -- Past Bolt Beam
-    wait_frames(3)
-    press_button("Down", 4)    -- Past Ice Beam -> on Heal Force
-    wait_frames(3)
-    press_button("A", 6)       -- Select Heal Force
+    local action_desc = cmd_name
+    if spell_name then action_desc = action_desc .. " " .. spell_name end
+    action_desc = action_desc .. " -> " .. target_type
+    if target_slot > 0 then action_desc = action_desc .. " " .. target_slot end
+    print("  BATTLE CMD: " .. action_desc)
+    last_battle_action = action_desc
+
+    -- STEP 1: Navigate to the command in the command menu.
+    -- Read cursor position from $0028. Use ONLY Down presses to reach
+    -- the target slot. NEVER press Up -- it opens equipment info
+    -- when already at slot 0 and traps us.
+    -- Down wraps around in FF6 menus (last slot -> first slot).
+    local current_cursor = mainmemory.read_u8(0x0028)
+    local target_slot = find_command_slot(cmd_name)
+    local num_commands = 2  -- MagiTek mode has 2 commands (MagiTek, Item)
+
+    if current_cursor ~= target_slot then
+        -- Calculate Down presses to reach target (wrapping with modulo)
+        local downs = (target_slot - current_cursor) % num_commands
+        if downs == 0 then downs = num_commands end  -- Full wrap if needed
+        print("    Cursor at " .. current_cursor .. ", need slot " .. target_slot .. ", pressing Down x" .. downs)
+        for i = 1, downs do
+            press_button("Down", 6)
+            wait_frames(6)
+        end
+    end
+
+    press_button("A", 8)   -- Confirm command selection
+    wait_frames(30)         -- Wait for submenu to fully open
+
+    -- STEP 2: Navigate submenu (if applicable)
+    if cmd_name:lower() == "magitek" and spell_name then
+        -- Reset cursor to top-left (Fire Beam) first
+        press_button("Up", 4)
+        wait_frames(2)
+        press_button("Left", 4)
+        wait_frames(4)
+
+        -- Now navigate to desired spell
+        local grid_pos = MAGITEK_GRID[spell_name]
+        if grid_pos then
+            navigate_grid(grid_pos.row, grid_pos.col)
+        end
+        press_button("A", 8)   -- Confirm spell
+        wait_frames(30)         -- Wait for target selection to appear
+
+    elseif cmd_name:lower() == "fight" then
+        -- No submenu, already in targeting from the A press above
+
+    elseif cmd_name:lower() == "item" then
+        -- TODO: navigate to specific item from RAM inventory data
+        press_button("A", 8)
+        wait_frames(30)
+    end
+
+    -- STEP 3: Target selection
+    if target_type == "ally" then
+        for i = 1, target_slot do
+            press_button("Down", 8)
+            wait_frames(8)
+        end
+    else
+        for i = 1, target_slot do
+            press_button("Right", 8)
+            wait_frames(8)
+        end
+    end
+
+    press_button("A", 8)   -- Confirm target
     wait_frames(15)
-    press_button("A", 6)       -- Select target
+end
+
+-----------------------------------------------------------------------
+-- BATTLE AI - Decides what command to issue each turn
+-----------------------------------------------------------------------
+function decide_battle_action()
+    -- Check if Python sent a specific command
+    if pending_battle_cmd then
+        local cmd = pending_battle_cmd
+        pending_battle_cmd = nil
+        return cmd
+    end
+
+    -- Autonomous decision based on party state
+    local weakest_ci, weakest_pct = get_weakest_party_member()
+
+    -- Priority 1: Heal if anyone below 35%
+    if weakest_pct < 0.35 then
+        return {cmd = "MagiTek", spell = "HealForce", target = "ally", slot = 0}
+    end
+
+    -- Priority 2: Attack with Bolt Beam (strongest beam)
+    -- Alternate between different beams for variety
+    local beams = {"BoltBeam", "FireBeam", "IceBeam", "BoltBeam"}
+    local beam_index = (battles_won + battle_stuck_count) % #beams + 1
+
+    return {cmd = "MagiTek", spell = beams[beam_index], target = "enemy", slot = 0}
 end
 
 function handle_battle()
     agent_state = "battle"
 
-    -- Only attempt a turn every BATTLE_TURN_COOLDOWN frames
-    -- This gives time for ATB to fill and animations to play
+    -- Cooldown between turn attempts
     if battle_turn_timer > 0 then
         battle_turn_timer = battle_turn_timer - 1
         return
     end
 
-    -- Check if battle is progressing (HP changing)
+    -- Stuck detection
     local hp_hash = get_hp_hash()
     if hp_hash == last_battle_hp then
         battle_stuck_count = battle_stuck_count + 1
         if battle_stuck_count > 5 then
-            -- Stuck in battle (probably in wrong submenu)
-            -- Press B to back out, then wait
             print("  BATTLE: Stuck! Pressing B to escape submenu")
             press_button("B", 6)
             wait_frames(10)
@@ -239,32 +411,40 @@ function handle_battle()
         last_battle_hp = hp_hash
     end
 
-    -- Decide: heal or attack
-    if party_needs_healing(0.30) then
-        execute_heal_turn()
-    else
-        execute_attack_turn()
-    end
+    -- Get action (from Python command or autonomous AI)
+    local action = decide_battle_action()
 
-    -- Cooldown before next turn attempt
+    -- Execute through the framework
+    execute_battle_command(action.cmd, action.spell, action.target, action.slot)
+
     battle_turn_timer = BATTLE_TURN_COOLDOWN
 end
 
 -----------------------------------------------------------------------
--- FIELD LOGIC
+-- FIELD / EXPLORATION
 -----------------------------------------------------------------------
 function handle_field()
     agent_state = "field"
-    local pos_key = get_pos_x() .. "," .. get_pos_y()
+    local x = get_pos_x()
+    local y = get_pos_y()
+    local pos_key = x .. "," .. y
+    local map = get_map_id()
 
     -- Track map changes
-    local map = get_map_id()
     if not maps_visited[map] then
         maps_visited[map] = true
-        print("  MAP CHANGE: now on map " .. map)
+        print("  MAP: entered " .. map)
+    end
+    if map ~= last_map_for_explore then
+        visited_positions = {}
+        explore_dir_index = 1
+        last_map_for_explore = map
+        walk_direction = "Up"
     end
 
-    -- Check if position changed
+    visited_positions[pos_key] = frame_count
+
+    -- Stuck detection
     if pos_key == last_field_pos then
         field_stuck_count = field_stuck_count + 1
     else
@@ -272,31 +452,25 @@ function handle_field()
         last_field_pos = pos_key
     end
 
-    -- Stuck handling
-    if field_stuck_count > 5 and field_stuck_count <= 10 then
-        -- Might be dialog - press A
+    -- Stuck handling (escalating)
+    if field_stuck_count > 3 and field_stuck_count <= 6 then
         press_button("A", 6)
         wait_frames(10)
         return
-    elseif field_stuck_count > 10 and field_stuck_count <= 15 then
-        -- Press B (menu overlay?)
+    elseif field_stuck_count > 6 and field_stuck_count <= 8 then
         press_button("B", 6)
         wait_frames(10)
         return
-    elseif field_stuck_count > 15 and field_stuck_count <= 25 then
-        -- Try alternate directions to get around obstacles
-        local dirs = {"Right", "Left", "Down", "Up", "Right", "Left", "Down", "Up", "Right", "Left"}
-        local idx = field_stuck_count - 15
-        if idx >= 1 and idx <= #dirs then
-            local alt = dirs[idx]
-            print("  FIELD: Trying " .. alt .. " to get around obstacle")
-            hold_direction(alt, 30)
-            wait_frames(5)
-        end
-        return
-    elseif field_stuck_count > 25 then
-        -- Reset and try again
+    elseif field_stuck_count > 8 then
+        -- Switch direction
+        explore_dir_index = explore_dir_index + 1
+        if explore_dir_index > #EXPLORE_DIRS then explore_dir_index = 1 end
+        walk_direction = EXPLORE_DIRS[explore_dir_index]
+        print("  EXPLORE: switching to " .. walk_direction)
         field_stuck_count = 0
+        hold_direction(walk_direction, 45)
+        wait_frames(5)
+        return
     end
 
     -- Normal walking
@@ -304,47 +478,42 @@ function handle_field()
 end
 
 -----------------------------------------------------------------------
--- BATTLE END DETECTION
+-- BATTLE TRANSITIONS
 -----------------------------------------------------------------------
 local was_in_battle = false
 
 function check_battle_transitions()
-    local current = detect_game_state()
+    local x = get_pos_x()
+    local current_in_battle = (x == 0)
 
-    if was_in_battle and current == "field" then
-        -- Battle just ended!
+    if was_in_battle and not current_in_battle then
         battles_won = battles_won + 1
         battle_stuck_count = 0
         battle_turn_timer = 0
         last_battle_hp = ""
-        print("*** BATTLE WON! Total: " .. battles_won .. " ***")
-
-        -- Press A a few times to clear victory screen
+        print("*** BATTLE WON #" .. battles_won .. " ***")
+        -- Press A to clear victory messages
         for i = 1, 10 do
             press_button("A", 6)
             wait_frames(10)
-            -- Check if we're back on field with position
-            if get_pos_x() > 0 then
-                break
-            end
+            if get_pos_x() > 0 then break end
         end
     end
 
-    if current == "battle" and not was_in_battle then
+    if current_in_battle and not was_in_battle then
         print("*** BATTLE START ***")
-        battle_turn_timer = 30  -- Short initial delay
+        battle_turn_timer = 30
         battle_stuck_count = 0
         last_battle_hp = ""
     end
 
-    was_in_battle = (current == "battle")
-    in_battle = was_in_battle
+    was_in_battle = current_in_battle
+    in_battle = current_in_battle
 end
 
 -----------------------------------------------------------------------
--- GAME STATE JSON (for Python monitoring)
+-- GAME STATE JSON
 -----------------------------------------------------------------------
--- FF6 text encoding
 local FF6_TEXT = {}
 for i = 0, 25 do FF6_TEXT[0x80 + i] = string.char(65 + i) end
 for i = 0, 25 do FF6_TEXT[0x9A + i] = string.char(97 + i) end
@@ -369,28 +538,35 @@ function write_game_state()
     local chars = {}
     for _, ci in ipairs({0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) do
         local base = CHAR_BASE + (ci * CHAR_SIZE)
-        local actor_id = mainmemory.read_u8(base + OFF_ACTOR)
+        local actor_id = mainmemory.read_u8(base + OFF.ACTOR)
         if actor_id ~= 0xFF then
-            local hp = read_u16(base + OFF_HP)
-            local hp_max = read_u16(base + OFF_HP_MAX)
+            local hp_max = read_u16(base + OFF.HP_MAX)
             if hp_max > 0 then
-                local name = read_ff6_name(base + OFF_NAME)
-                local level = mainmemory.read_u8(base + OFF_LEVEL)
-                local mp = read_u16(base + OFF_MP)
-                local mp_max = read_u16(base + OFF_MP_MAX)
+                local hp = read_u16(base + OFF.HP)
+                local name = read_ff6_name(base + OFF.NAME)
+                local level = mainmemory.read_u8(base + OFF.LEVEL)
+                local mp = read_u16(base + OFF.MP)
+                local mp_max = read_u16(base + OFF.MP_MAX)
+                -- Read commands
+                local cmds = get_char_commands(ci)
+                local cmd_names = {}
+                for _, c in ipairs(cmds) do
+                    table.insert(cmd_names, '"' .. (CMD_NAMES[c] or "Cmd" .. c) .. '"')
+                end
                 table.insert(chars, string.format(
-                    '{"index":%d,"actor_id":%d,"name":"%s","level":%d,"hp":%d,"hp_max":%d,"mp":%d,"mp_max":%d}',
-                    ci, actor_id, json_escape(name), level, hp, hp_max, mp, mp_max
+                    '{"index":%d,"actor_id":%d,"name":"%s","level":%d,'..
+                    '"hp":%d,"hp_max":%d,"mp":%d,"mp_max":%d,'..
+                    '"commands":[%s]}',
+                    ci, actor_id, json_escape(name), level,
+                    hp, hp_max, mp, mp_max,
+                    table.concat(cmd_names, ",")
                 ))
             end
         end
     end
 
-    -- Map visited list
     local map_list = {}
-    for m, _ in pairs(maps_visited) do
-        table.insert(map_list, tostring(m))
-    end
+    for m, _ in pairs(maps_visited) do table.insert(map_list, tostring(m)) end
 
     local json = '{\n'
     json = json .. '  "frame": ' .. frame_count .. ',\n'
@@ -398,6 +574,7 @@ function write_game_state()
     json = json .. '  "agent_enabled": ' .. (agent_enabled and "true" or "false") .. ',\n'
     json = json .. '  "walk_direction": "' .. walk_direction .. '",\n'
     json = json .. '  "battles_won": ' .. battles_won .. ',\n'
+    json = json .. '  "last_battle_action": "' .. json_escape(last_battle_action) .. '",\n'
     json = json .. '  "maps_visited": [' .. table.concat(map_list, ",") .. '],\n'
     json = json .. '  "field_stuck": ' .. field_stuck_count .. ',\n'
     json = json .. '  "gold": ' .. get_gold() .. ',\n'
@@ -408,21 +585,17 @@ function write_game_state()
     json = json .. '}'
 
     local file = io.open(GAMESTATE_FILE, "w")
-    if file then
-        file:write(json)
-        file:close()
-    end
+    if file then file:write(json); file:close() end
 end
 
 -----------------------------------------------------------------------
--- COMMAND FILE (Python -> Lua, high-level only)
+-- COMMAND FILE (Python -> Lua)
 -----------------------------------------------------------------------
 function init_file_comm()
     local f = io.open(COMMAND_FILE, "w")
     if f then f:close() end
     local r = io.open(RESPONSE_FILE, "w")
     if r then r:write("READY\n"); r:close() end
-    print("File comm ready")
     return true
 end
 
@@ -433,14 +606,12 @@ function check_commands()
     file:close()
     if not cmd or cmd == "" then return end
 
-    -- Clear command file
     local cf = io.open(COMMAND_FILE, "w")
     if cf then cf:close() end
 
     print("CMD: " .. cmd)
     local response = "OK"
 
-    -- High-level commands
     if cmd == "PING" then
         response = "PONG"
     elseif cmd == "STATUS" then
@@ -461,11 +632,26 @@ function check_commands()
             field_stuck_count = 0
             response = "OK: Walking " .. dir
         end
+    elseif cmd:match("^BATTLE ") then
+        -- Battle command from Python AI: "BATTLE MagiTek BoltBeam enemy 0"
+        local parts = {}
+        for part in cmd:gmatch("%S+") do table.insert(parts, part) end
+        -- parts[1] = "BATTLE", parts[2] = cmd, parts[3] = spell, parts[4] = target, parts[5] = slot
+        if #parts >= 3 then
+            pending_battle_cmd = {
+                cmd = parts[2],
+                spell = parts[3] ~= "none" and parts[3] or nil,
+                target = parts[4] or "enemy",
+                slot = tonumber(parts[5]) or 0,
+            }
+            response = "OK: Battle command queued: " .. table.concat(parts, " ", 2)
+        else
+            response = "ERROR: BATTLE needs at least cmd and spell"
+        end
     elseif cmd == "GAMESTATE" then
         write_game_state()
         response = "OK: State written"
     elseif cmd:match("^PRESS ") then
-        -- Still support manual button presses for Python control
         local parts = {}
         for part in cmd:gmatch("%S+") do table.insert(parts, part) end
         local button = parts[2]
@@ -498,42 +684,36 @@ end
 -- MAIN LOOP
 -----------------------------------------------------------------------
 if not init_file_comm() then
-    print("Failed to init")
+    print("Failed to init file comm")
     return
 end
 
-print("Agent running. Walk direction: " .. walk_direction)
+print("Agent v2 running | Walk: " .. walk_direction)
 write_game_state()
 
 while running do
-    -- Check for Python commands (high-level only)
     check_commands()
 
-    -- Agent logic
     if agent_enabled then
         check_battle_transitions()
-
-        local state = detect_game_state()
-        if state == "battle" then
+        if get_pos_x() == 0 then
             handle_battle()
         else
             handle_field()
         end
     end
 
-    -- Write game state periodically
     if frame_count % GAMESTATE_INTERVAL == 0 then
         write_game_state()
     end
 
-    -- Normal frame advance (only if agent didn't already advance frames)
     emu.frameadvance()
     frame_count = frame_count + 1
 
-    -- Status report
     if frame_count % 1800 == 0 then
-        print("Frame " .. frame_count .. " | State: " .. agent_state ..
-              " | Won: " .. battles_won .. " | Map: " .. get_map_id())
+        print("F" .. frame_count .. " | " .. agent_state ..
+              " | Won:" .. battles_won .. " | Map:" .. get_map_id() ..
+              " | " .. last_battle_action)
     end
 end
 
