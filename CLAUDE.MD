@@ -34,3 +34,25 @@ To Activate: "C:\Users\Admin\anaconda3\condabin\activate.bat" CC_RVGAI
 NEVER use unicode characters for any reason.
 
 Birdseye is NOT compatible with our version of BizHawk
+
+** CORE DESIGN PRINCIPLE: Verify-Then-Act from RAM **
+
+The #1 lesson from this project: NEVER guess what's on screen. ALWAYS read memory first.
+
+For every new game mechanic (menu navigation, spell selection, targeting, etc.):
+1. FIND the RAM address by diffing memory before/after a known input
+2. VERIFY the address maps correctly across multiple game states
+3. BUILD Lua control that reads the address, confirms state, then acts
+4. WIRE to Python/AI so LLM says WHAT to do, Lua handles HOW with verified execution
+
+Example: Battle command cursor lives at $0018 (0=MagiTek, 1=Item). We read $0018, verify it's on the right slot, THEN press A. If wrong, press Down and re-check.
+
+Key files:
+- Bizhawk/Lua/ff6_agent.lua - ALL gameplay execution (frame-perfect, verified)
+- ff6_ai_brain.py - Strategic decisions (attack vs heal, which spell)
+- app.py - Flask API for monitoring + manual control
+- bizhawk_controller_file.py - Python<->Lua command bridge
+
+Proven RAM addresses: see ff6_agent.lua header comments.
+Save states: slot 1 = inside Narshe, slot 3 = at Narshe gates (post-intro).
+Tesseract is NOT installed. Use memory reading, not OCR.

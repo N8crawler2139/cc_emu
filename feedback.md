@@ -1,4 +1,17 @@
-### Current Status (2026-03-25)
+### Current Status (2026-03-26)
+Battle command framework works with verified cursor ($0018). Agent wins battles using BoltBeam.
+
+**Next steps (follow the FIND-VERIFY-BUILD-WIRE pattern for each):**
+- Find MagiTek spell cursor address (for selecting specific spells like HealForce)
+- Find target selection cursor address (for targeting specific enemies/allies)
+- Find field dialog/interaction address (to detect when dialog is showing)
+- Add game knowledge so AI knows "walk Up in Narshe opening"
+- Whelk boss: find how to detect shell-open vs shell-closed
+
+**Design pattern:** Diff RAM before/after input -> find address -> verify -> build Lua control -> wire to AI.
+See CLAUDE.md for full description.
+
+### Previous Status (2026-03-25)
 The unified agent (ff6_agent.py) works. It walked from Narshe gates through the city and into the mines, winning 5 battles. Next priorities:
 - Add LLM-based strategic navigation (the agent currently just walks Up)
 - Handle the Whelk boss fight (may need special logic to avoid attacking the shell)
