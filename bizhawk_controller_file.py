@@ -364,6 +364,44 @@ class BizHawkControllerFile:
         """Set the agent's walk direction (Up/Down/Left/Right)."""
         self._send_command(f"WALK {direction}")
         return self._receive_response(timeout=2)
+
+    def manual_battle_on(self):
+        """Enable manual battle mode (only Python commands, no autonomous)."""
+        self._send_command("MANUAL BATTLE ON")
+        return self._receive_response(timeout=2)
+
+    def manual_battle_off(self):
+        """Disable manual battle mode (autonomous AI decides)."""
+        self._send_command("MANUAL BATTLE OFF")
+        return self._receive_response(timeout=2)
+
+    def battle_command(self, cmd, spell="none", target="enemy", slot=0):
+        """Send a battle command. E.g. battle_command('MagiTek', 'BoltBeam', 'enemy', 0)"""
+        self._send_command(f"BATTLE {cmd} {spell} {target} {slot}")
+        return self._receive_response(timeout=2)
+
+    def wait_for_battle(self, timeout=60):
+        """Block until enemies are detected (battle started)."""
+        import time
+        start = time.time()
+        while time.time() - start < timeout:
+            v = self.read_memory(0x3A77, 1)
+            if v and v[0] > 0 and v[0] < 10:
+                return v[0]
+            time.sleep(1)
+        return 0
+
+    def wait_for_menu_ready(self, timeout=10):
+        """Block until battle menu is open and ready for input."""
+        import time
+        start = time.time()
+        while time.time() - start < timeout:
+            menu = self.read_memory(0x7BCA, 1)
+            disabled = self.read_memory(0x628B, 1)
+            if menu and disabled and menu[0] != 0 and disabled[0] == 0:
+                return True
+            time.sleep(0.3)
+        return False
     
     def get_status(self):
         """Get emulator status"""

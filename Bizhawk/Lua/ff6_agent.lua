@@ -92,6 +92,7 @@ local last_battle_hp = ""
 local battle_stuck_count = 0
 local battles_won = 0
 local pending_battle_cmd = nil  -- Command from Python: "MagiTek BoltBeam enemy"
+local manual_battle_mode = false -- When true, ONLY execute Python commands (no autonomous)
 
 -- Field / Exploration
 local last_field_pos = ""
@@ -528,14 +529,20 @@ function handle_battle()
         return
     end
 
-    -- Menu is ready! Decide and execute a turn.
+    -- In manual mode, only act if Python sent a command
+    if manual_battle_mode and not pending_battle_cmd then
+        return  -- Wait for Python to send a BATTLE command
+    end
+
+    -- Decide and execute
     local action = decide_battle_action()
     local success = execute_battle_command(action.cmd, action.spell, action.target, action.slot)
 
     if success then
-        -- Turn consumed! Clear pending command if it was from Python
         if pending_battle_cmd then
-            print("  Python command executed successfully!")
+            print("  Python command executed: " ..
+                  (pending_battle_cmd.cmd or "") .. " " ..
+                  (pending_battle_cmd.spell or ""))
             pending_battle_cmd = nil
         end
     else
@@ -731,6 +738,7 @@ function write_game_state()
     json = json .. '  "frame": ' .. frame_count .. ',\n'
     json = json .. '  "agent_state": "' .. agent_state .. '",\n'
     json = json .. '  "agent_enabled": ' .. (agent_enabled and "true" or "false") .. ',\n'
+    json = json .. '  "manual_battle": ' .. (manual_battle_mode and "true" or "false") .. ',\n'
     json = json .. '  "walk_direction": "' .. walk_direction .. '",\n'
     json = json .. '  "battles_won": ' .. battles_won .. ',\n'
     json = json .. '  "last_battle_action": "' .. json_escape(last_battle_action) .. '",\n'
@@ -784,6 +792,12 @@ function check_commands()
     elseif cmd == "AGENT OFF" then
         agent_enabled = false
         response = "OK: Agent disabled"
+    elseif cmd == "MANUAL BATTLE ON" then
+        manual_battle_mode = true
+        response = "OK: Manual battle mode ON (waiting for BATTLE commands)"
+    elseif cmd == "MANUAL BATTLE OFF" then
+        manual_battle_mode = false
+        response = "OK: Manual battle mode OFF (autonomous)"
     elseif cmd:match("^WALK ") then
         local dir = cmd:match("^WALK (%S+)")
         if dir then
