@@ -375,20 +375,32 @@ function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
     print("    Step0: menu ready, char slot=" .. char_before)
 
     -- =====================================================
-    -- STEP 1: Select command.
-    -- The cursor DEFAULTS to the first command (MagiTek/Fight)
-    -- when a character's turn starts. DON'T press Down at all
-    -- for slot 0 -- just press A immediately.
-    -- For slot 1+, press Down the exact number of times needed.
+    -- STEP 1: Select command using VERIFIED cursor position.
+    -- $0018 = command cursor (0 = first slot, 1 = second, etc.)
+    -- Read it, navigate with Down if needed, VERIFY before pressing A.
     -- NEVER press Up (opens equipment info at slot 0).
     -- =====================================================
     local cmd_slot = find_command_slot(cmd_name)
-    print("    Step1: selecting slot " .. cmd_slot)
+    local current_cmd_cursor = mainmemory.read_u8(0x0018)
+    print("    Step1: cursor at " .. current_cmd_cursor .. ", want slot " .. cmd_slot)
 
-    -- Only press Down if we need slot > 0
-    for i = 1, cmd_slot do
+    -- Navigate to correct slot
+    local max_attempts = 5
+    for attempt = 1, max_attempts do
+        current_cmd_cursor = mainmemory.read_u8(0x0018)
+        if current_cmd_cursor == cmd_slot then
+            print("    Step1: cursor confirmed on slot " .. cmd_slot)
+            break
+        end
+        -- Press Down to move cursor
         press_button("Down", 6)
         wait_frames(8)
+        -- Verify it moved
+        local new_cursor = mainmemory.read_u8(0x0018)
+        print("    Step1: Down -> cursor " .. current_cmd_cursor .. " -> " .. new_cursor)
+        if attempt == max_attempts then
+            print("    Step1: WARN - couldn't reach slot " .. cmd_slot .. " after " .. max_attempts .. " attempts")
+        end
     end
 
     -- =====================================================
