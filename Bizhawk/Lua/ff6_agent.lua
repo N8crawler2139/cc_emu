@@ -219,19 +219,67 @@ function wait_frames(n)
 end
 
 -----------------------------------------------------------------------
--- GRID NAVIGATION
--- Navigate from (0,0) to (target_row, target_col) in a 2D menu grid
+-- VERIFIED INPUT: Press a button and wait until a memory address changes
+-- This is the core of the "verify before proceeding" approach.
 -----------------------------------------------------------------------
-function navigate_grid(target_row, target_col)
-    -- Press Down for each row (8 frames per press, 8 frame gap)
-    for r = 1, target_row do
-        press_button("Down", 8)
-        wait_frames(8)
+function press_and_wait_for_change(button, watch_addr, max_wait)
+    max_wait = max_wait or 60  -- Max frames to wait (1 second)
+    local before = mainmemory.read_u8(watch_addr)
+
+    -- Press the button
+    press_button(button, 6)
+
+    -- Poll until the watched address changes or timeout
+    for f = 1, max_wait do
+        emu.frameadvance()
+        frame_count = frame_count + 1
+        local current = mainmemory.read_u8(watch_addr)
+        if current ~= before then
+            return true, current  -- Success: value changed
+        end
     end
-    -- Press Right for each column
+    return false, before  -- Timeout: value never changed
+end
+
+-- Press a button and wait for EITHER of two addresses to change
+function press_and_wait_for_either(button, addr1, addr2, max_wait)
+    max_wait = max_wait or 60
+    local before1 = mainmemory.read_u8(addr1)
+    local before2 = mainmemory.read_u8(addr2)
+
+    press_button(button, 6)
+
+    for f = 1, max_wait do
+        emu.frameadvance()
+        frame_count = frame_count + 1
+        local cur1 = mainmemory.read_u8(addr1)
+        local cur2 = mainmemory.read_u8(addr2)
+        if cur1 ~= before1 or cur2 ~= before2 then
+            return true, cur1, cur2
+        end
+    end
+    return false, before1, before2
+end
+
+-----------------------------------------------------------------------
+-- GRID NAVIGATION with verification
+-----------------------------------------------------------------------
+function navigate_grid_verified(target_row, target_col)
+    for r = 1, target_row do
+        local ok, new_val = press_and_wait_for_change("Down", 0x0028, 30)
+        if ok then
+            print("    Grid Down: cursor moved to " .. new_val)
+        else
+            print("    Grid Down: cursor STUCK at " .. new_val)
+        end
+    end
     for c = 1, target_col do
-        press_button("Right", 8)
-        wait_frames(8)
+        local ok, new_val = press_and_wait_for_change("Right", 0x0028, 30)
+        if ok then
+            print("    Grid Right: cursor moved to " .. new_val)
+        else
+            print("    Grid Right: cursor STUCK at " .. new_val)
+        end
     end
 end
 
@@ -292,69 +340,87 @@ function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
     print("  BATTLE CMD: " .. action_desc)
     last_battle_action = action_desc
 
+    -- =====================================================
     -- STEP 1: Navigate to the command in the command menu.
-    -- Read cursor position from $0028. Use ONLY Down presses to reach
-    -- the target slot. NEVER press Up -- it opens equipment info
-    -- when already at slot 0 and traps us.
-    -- Down wraps around in FF6 menus (last slot -> first slot).
-    local current_cursor = mainmemory.read_u8(0x0028)
+    -- We verify each cursor movement by reading $0028.
+    -- =====================================================
     local target_slot = find_command_slot(cmd_name)
-    local num_commands = 2  -- MagiTek mode has 2 commands (MagiTek, Item)
+    local current_cursor = mainmemory.read_u8(0x0028)
+    local menu_before = mainmemory.read_u8(0x0026)
+    print("    Step1: cmd menu. cursor=" .. current_cursor .. " menu=" .. menu_before .. " target_slot=" .. target_slot)
 
-    if current_cursor ~= target_slot then
-        -- Calculate Down presses to reach target (wrapping with modulo)
-        local downs = (target_slot - current_cursor) % num_commands
-        if downs == 0 then downs = num_commands end  -- Full wrap if needed
-        print("    Cursor at " .. current_cursor .. ", need slot " .. target_slot .. ", pressing Down x" .. downs)
-        for i = 1, downs do
-            press_button("Down", 6)
-            wait_frames(6)
+    -- Navigate to the right command slot using Down (verified)
+    -- We don't know the exact cursor values for each slot,
+    -- but we know Down changes $0028. Press Down target_slot times
+    -- from the TOP. First go to top by pressing Down until wrap.
+    -- Actually simpler: just press Down (target_slot) times and verify each.
+    for i = 1, target_slot do
+        local ok = press_and_wait_for_change("Down", 0x0028, 20)
+        if not ok then
+            print("    WARN: cursor didn't move on Down #" .. i)
         end
     end
 
-    press_button("A", 8)   -- Confirm command selection
-    wait_frames(30)         -- Wait for submenu to fully open
+    -- =====================================================
+    -- STEP 2: Press A and VERIFY the menu changed.
+    -- $0026 should change when the submenu opens.
+    -- =====================================================
+    local ok_a, new_menu = press_and_wait_for_change("A", 0x0026, 45)
+    if ok_a then
+        print("    Step2: A pressed, menu changed to " .. new_menu)
+    else
+        print("    WARN: A pressed but menu didn't change (still " .. new_menu .. ")")
+        -- Might already be in the right state, continue
+    end
 
-    -- STEP 2: Navigate submenu (if applicable)
+    -- =====================================================
+    -- STEP 3: Navigate submenu (if applicable)
+    -- =====================================================
     if cmd_name:lower() == "magitek" and spell_name then
-        -- Reset cursor to top-left (Fire Beam) first
-        press_button("Up", 4)
-        wait_frames(2)
-        press_button("Left", 4)
-        wait_frames(4)
-
-        -- Now navigate to desired spell
+        -- We're in the MagiTek spell grid.
+        -- Navigate to the target spell and VERIFY cursor moves.
         local grid_pos = MAGITEK_GRID[spell_name]
         if grid_pos then
-            navigate_grid(grid_pos.row, grid_pos.col)
+            print("    Step3: navigate to " .. spell_name .. " (row=" .. grid_pos.row .. " col=" .. grid_pos.col .. ")")
+            navigate_grid_verified(grid_pos.row, grid_pos.col)
         end
-        press_button("A", 8)   -- Confirm spell
-        wait_frames(30)         -- Wait for target selection to appear
+
+        -- Press A to select spell, verify menu changes
+        local ok_spell, new_menu2 = press_and_wait_for_change("A", 0x0026, 45)
+        if ok_spell then
+            print("    Step3: spell selected, menu=" .. new_menu2)
+        else
+            print("    WARN: spell A didn't change menu")
+        end
 
     elseif cmd_name:lower() == "fight" then
-        -- No submenu, already in targeting from the A press above
+        -- Fight goes straight to targeting (A already pressed above)
+        print("    Step3: Fight, direct to target")
 
     elseif cmd_name:lower() == "item" then
-        -- TODO: navigate to specific item from RAM inventory data
-        press_button("A", 8)
-        wait_frames(30)
+        -- TODO: item submenu navigation
+        print("    Step3: Item (not yet implemented)")
+        press_button("A", 6)
+        wait_frames(20)
     end
 
-    -- STEP 3: Target selection
+    -- =====================================================
+    -- STEP 4: Target selection. Press A to confirm target.
+    -- For now, always select first target.
+    -- =====================================================
     if target_type == "ally" then
         for i = 1, target_slot do
-            press_button("Down", 8)
-            wait_frames(8)
+            press_and_wait_for_change("Down", 0x0028, 20)
         end
     else
         for i = 1, target_slot do
-            press_button("Right", 8)
-            wait_frames(8)
+            press_and_wait_for_change("Right", 0x0028, 20)
         end
     end
 
-    press_button("A", 8)   -- Confirm target
-    wait_frames(15)
+    print("    Step4: confirming target")
+    press_button("A", 6)
+    wait_frames(10)
 end
 
 -----------------------------------------------------------------------
@@ -452,28 +518,43 @@ function handle_field()
         last_field_pos = pos_key
     end
 
-    -- Stuck handling (escalating)
+    -- Stuck handling: nudge sideways to get around obstacles,
+    -- but ALWAYS return to the primary walk direction.
+    -- Never permanently change direction from random cycling.
     if field_stuck_count > 3 and field_stuck_count <= 6 then
+        -- Might be dialog
         press_button("A", 6)
         wait_frames(10)
         return
     elseif field_stuck_count > 6 and field_stuck_count <= 8 then
+        -- Might be menu overlay
         press_button("B", 6)
         wait_frames(10)
         return
     elseif field_stuck_count > 8 then
-        -- Switch direction
-        explore_dir_index = explore_dir_index + 1
-        if explore_dir_index > #EXPLORE_DIRS then explore_dir_index = 1 end
-        walk_direction = EXPLORE_DIRS[explore_dir_index]
-        print("  EXPLORE: switching to " .. walk_direction)
-        field_stuck_count = 0
-        hold_direction(walk_direction, 45)
-        wait_frames(5)
+        -- Blocked by wall. Nudge sideways then continue primary direction.
+        -- Alternate: Right+primary, Left+primary, longer Right+primary, etc.
+        local nudge_cycle = (field_stuck_count - 9) % 4
+        local nudge_dir
+        if nudge_cycle == 0 then nudge_dir = "Right"
+        elseif nudge_cycle == 1 then nudge_dir = "Left"
+        elseif nudge_cycle == 2 then nudge_dir = "Right"
+        else nudge_dir = "Left"
+        end
+
+        -- Nudge sideways
+        print("  STUCK: nudge " .. nudge_dir .. " then " .. walk_direction)
+        hold_direction(nudge_dir, 20)
+        wait_frames(3)
+        -- Then continue in primary direction
+        hold_direction(walk_direction, 30)
+        wait_frames(3)
+        -- Don't reset stuck_count -- if this nudge doesn't work,
+        -- the next cycle will try the other side
         return
     end
 
-    -- Normal walking
+    -- Normal walking in primary direction
     hold_direction(walk_direction, WALK_FRAMES)
 end
 
