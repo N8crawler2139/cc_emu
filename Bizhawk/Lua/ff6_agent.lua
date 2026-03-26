@@ -363,33 +363,32 @@ function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
     local char_before = mainmemory.read_u8(0x7B80)
 
     -- =====================================================
-    -- STEP 0: Wait for menu to be ready
+    -- STEP 0: Wait for menu to be ready. Give it extra time
+    -- so the menu is fully rendered and cursor is settled.
     -- =====================================================
     if not wait_for_menu_ready(120) then
         print("    ABORT: menu not ready after 2 seconds")
         return false
     end
+    -- Extra settle time - the menu needs a moment after opening
+    wait_frames(15)
     print("    Step0: menu ready, char slot=" .. char_before)
 
     -- =====================================================
-    -- STEP 1: Navigate to command slot using Down.
-    -- Verify each Down press changes $0028 (cursor position).
-    -- NEVER press Up (triggers equipment info at slot 0).
+    -- STEP 1: Select command.
+    -- The cursor DEFAULTS to the first command (MagiTek/Fight)
+    -- when a character's turn starts. DON'T press Down at all
+    -- for slot 0 -- just press A immediately.
+    -- For slot 1+, press Down the exact number of times needed.
+    -- NEVER press Up (opens equipment info at slot 0).
     -- =====================================================
     local cmd_slot = find_command_slot(cmd_name)
-    print("    Step1: navigate to cmd slot " .. cmd_slot)
+    print("    Step1: selecting slot " .. cmd_slot)
 
+    -- Only press Down if we need slot > 0
     for i = 1, cmd_slot do
-        local ok, new_cursor = press_and_wait_for_change("Down", 0x0028, 20)
-        if ok then
-            print("    Step1: Down #" .. i .. " -> cursor=" .. new_cursor)
-        else
-            print("    Step1: Down #" .. i .. " FAILED (cursor stuck)")
-            -- Try pressing B and retrying
-            press_button("B", 6)
-            wait_frames(15)
-            return false
-        end
+        press_button("Down", 6)
+        wait_frames(8)
     end
 
     -- =====================================================
@@ -517,6 +516,23 @@ function handle_battle()
     local menu_open = mainmemory.read_u8(0x7BCA)
     local menu_disabled = mainmemory.read_u8(0x628B)
 
+    -- Check party HP from BATTLE RAM ($3BF4+) -- NOT the field data
+    local party_alive = 0
+    for i = 0, 2 do
+        local bhp = read_u16(0x3BF4 + i * 2)
+        if bhp > 0 then party_alive = party_alive + 1 end
+    end
+
+    -- GAME OVER CHECK: if entire party is dead, stop doing anything
+    if party_alive == 0 and enemies > 0 then
+        agent_state = "gameover"
+        print("  *** GAME OVER: Party wiped! ***")
+        -- Press A to acknowledge game over
+        press_button("A", 6)
+        wait_frames(30)
+        return
+    end
+
     -- If enemies are dead, this is the victory screen -- press A
     if enemies == 0 then
         press_button("A", 6)
@@ -556,7 +572,31 @@ end
 
 -----------------------------------------------------------------------
 -- FIELD / EXPLORATION
+-- Smart exploration: try walking in each direction, keep whichever
+-- one actually moves us to a new position. Prefers directions that
+-- lead to unvisited tiles.
 -----------------------------------------------------------------------
+
+-- Try walking in a direction and return true if position changed
+function try_walk(dir, frames)
+    local x_before = get_pos_x()
+    local y_before = get_pos_y()
+    hold_direction(dir, frames or 20)
+    wait_frames(3)
+    local x_after = get_pos_x()
+    local y_after = get_pos_y()
+    return (x_after ~= x_before or y_after ~= y_before)
+end
+
+-- Check if a position has been visited recently
+function is_recently_visited(x, y)
+    local key = x .. "," .. y
+    local when = visited_positions[key]
+    if not when then return false end
+    -- Consider "recent" if visited in last 600 frames (10 seconds)
+    return (frame_count - when) < 600
+end
+
 function handle_field()
     agent_state = "field"
     local x = get_pos_x()
@@ -574,8 +614,10 @@ function handle_field()
         explore_dir_index = 1
         last_map_for_explore = map
         walk_direction = "Up"
+        print("  New map " .. map .. ", exploring from (" .. x .. "," .. y .. ")")
     end
 
+    -- Record visit
     visited_positions[pos_key] = frame_count
 
     -- Stuck detection
@@ -586,43 +628,60 @@ function handle_field()
         last_field_pos = pos_key
     end
 
-    -- Stuck handling: nudge sideways to get around obstacles,
-    -- but ALWAYS return to the primary walk direction.
-    -- Never permanently change direction from random cycling.
-    if field_stuck_count > 3 and field_stuck_count <= 6 then
-        -- Might be dialog
+    -- DIALOG: if stuck briefly, might be dialog
+    if field_stuck_count > 2 and field_stuck_count <= 5 then
         press_button("A", 6)
-        wait_frames(10)
-        return
-    elseif field_stuck_count > 6 and field_stuck_count <= 8 then
-        -- Might be menu overlay
-        press_button("B", 6)
-        wait_frames(10)
-        return
-    elseif field_stuck_count > 8 then
-        -- Blocked by wall. Nudge sideways then continue primary direction.
-        -- Alternate: Right+primary, Left+primary, longer Right+primary, etc.
-        local nudge_cycle = (field_stuck_count - 9) % 4
-        local nudge_dir
-        if nudge_cycle == 0 then nudge_dir = "Right"
-        elseif nudge_cycle == 1 then nudge_dir = "Left"
-        elseif nudge_cycle == 2 then nudge_dir = "Right"
-        else nudge_dir = "Left"
-        end
-
-        -- Nudge sideways
-        print("  STUCK: nudge " .. nudge_dir .. " then " .. walk_direction)
-        hold_direction(nudge_dir, 20)
-        wait_frames(3)
-        -- Then continue in primary direction
-        hold_direction(walk_direction, 30)
-        wait_frames(3)
-        -- Don't reset stuck_count -- if this nudge doesn't work,
-        -- the next cycle will try the other side
+        wait_frames(8)
         return
     end
 
-    -- Normal walking in primary direction
+    -- MENU: if still stuck, try B
+    if field_stuck_count > 5 and field_stuck_count <= 7 then
+        press_button("B", 6)
+        wait_frames(8)
+        return
+    end
+
+    -- WALL: if stuck for a while, try alternate directions
+    -- but DON'T permanently adopt them. Try them once, then return to Up.
+    if field_stuck_count > 7 then
+        -- Try directions in priority order: Up first (main progress),
+        -- then alternates to get around obstacles
+        local try_dirs
+        if field_stuck_count <= 10 then
+            -- First: try combining sideways + up to get around walls
+            try_dirs = {"Right", "Left"}
+        elseif field_stuck_count <= 14 then
+            -- Then try longer sideways walks
+            try_dirs = {"Right", "Left", "Down"}
+        else
+            -- Exhausted: try everything including Down
+            try_dirs = {"Down", "Right", "Left", "Down"}
+        end
+
+        local idx = ((field_stuck_count - 8) % #try_dirs) + 1
+        local alt_dir = try_dirs[idx]
+
+        -- Walk sideways briefly, then try Up again
+        print("  STUCK: try " .. alt_dir .. " then Up from (" .. x .. "," .. y .. ")")
+        if try_walk(alt_dir, 30) then
+            -- Moved! Now try Up
+            try_walk("Up", 30)
+        end
+
+        -- Always reset to Up as the primary direction
+        walk_direction = "Up"
+
+        -- If stuck for too long, press A (might be a door or NPC)
+        if field_stuck_count > 20 then
+            press_button("A", 6)
+            wait_frames(10)
+            field_stuck_count = 0
+        end
+        return
+    end
+
+    -- NORMAL: walk in primary direction (Up for Narshe progression)
     hold_direction(walk_direction, WALK_FRAMES)
 end
 
@@ -748,6 +807,22 @@ function write_game_state()
     json = json .. '  "map_id": ' .. get_map_id() .. ',\n'
     json = json .. '  "position": {"x": ' .. get_pos_x() .. ', "y": ' .. get_pos_y() .. '},\n'
     json = json .. '  "in_battle": ' .. (in_battle and "true" or "false") .. ',\n'
+
+    -- Battle HP from actual battle RAM (more accurate during combat)
+    local battle_hp = {}
+    for i = 0, 3 do
+        table.insert(battle_hp, tostring(read_u16(0x3BF4 + i * 2)))
+    end
+    json = json .. '  "battle_hp": [' .. table.concat(battle_hp, ",") .. '],\n'
+
+    -- Enemy HP and count
+    json = json .. '  "enemies_alive": ' .. mainmemory.read_u8(0x3A77) .. ',\n'
+    local enemy_hp = {}
+    for i = 0, 5 do
+        table.insert(enemy_hp, tostring(read_u16(0x3BFC + i * 2)))
+    end
+    json = json .. '  "enemy_hp": [' .. table.concat(enemy_hp, ",") .. '],\n'
+
     json = json .. '  "characters": [\n    ' .. table.concat(chars, ",\n    ") .. '\n  ]\n'
     json = json .. '}'
 
