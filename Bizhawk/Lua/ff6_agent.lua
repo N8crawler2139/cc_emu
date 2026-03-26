@@ -322,13 +322,31 @@ function find_command_slot(command_name)
     return 0  -- Default to first slot
 end
 
--- Execute a complete battle command with frame-perfect timing.
--- cmd_name:    "MagiTek", "Fight", "Magic", "Item"
--- spell_name:  For MagiTek: "FireBeam", "BoltBeam", "IceBeam", "HealForce"
---              For Magic: spell name (TODO)
---              For Fight/Item: nil
--- target_type: "enemy" or "ally"
--- target_slot: 0-based index (which enemy/ally, default 0)
+-- Verified battle RAM addresses:
+--   $7BCA = menu open (1 = waiting for input)
+--   $628B = menu disabled (nonzero = animation playing)
+--   $7B80 = active character slot (0-3, changes when turn consumed)
+--   $0028 = cursor position (changes with Up/Down/Left/Right)
+--   $3A77 = enemies alive
+
+function wait_for_menu_ready(max_wait)
+    -- Wait until the battle menu is open and ready for input
+    max_wait = max_wait or 120  -- 2 seconds max
+    for f = 1, max_wait do
+        local menu_open = mainmemory.read_u8(0x7BCA)
+        local menu_disabled = mainmemory.read_u8(0x628B)
+        if menu_open ~= 0 and menu_disabled == 0 then
+            return true
+        end
+        emu.frameadvance()
+        frame_count = frame_count + 1
+    end
+    return false
+end
+
+-- Execute a complete battle command with VERIFIED transitions.
+-- Each step reads memory to confirm the game registered our input
+-- before proceeding to the next step.
 function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
     target_type = target_type or "enemy"
     target_slot = target_slot or 0
@@ -340,73 +358,90 @@ function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
     print("  BATTLE CMD: " .. action_desc)
     last_battle_action = action_desc
 
-    -- =====================================================
-    -- STEP 1: Navigate to the command in the command menu.
-    -- We verify each cursor movement by reading $0028.
-    -- =====================================================
-    local target_slot = find_command_slot(cmd_name)
-    local current_cursor = mainmemory.read_u8(0x0028)
-    local menu_before = mainmemory.read_u8(0x0026)
-    print("    Step1: cmd menu. cursor=" .. current_cursor .. " menu=" .. menu_before .. " target_slot=" .. target_slot)
+    -- Record who is acting so we can verify turn was consumed
+    local char_before = mainmemory.read_u8(0x7B80)
 
-    -- Navigate to the right command slot using Down (verified)
-    -- We don't know the exact cursor values for each slot,
-    -- but we know Down changes $0028. Press Down target_slot times
-    -- from the TOP. First go to top by pressing Down until wrap.
-    -- Actually simpler: just press Down (target_slot) times and verify each.
-    for i = 1, target_slot do
-        local ok = press_and_wait_for_change("Down", 0x0028, 20)
-        if not ok then
-            print("    WARN: cursor didn't move on Down #" .. i)
+    -- =====================================================
+    -- STEP 0: Wait for menu to be ready
+    -- =====================================================
+    if not wait_for_menu_ready(120) then
+        print("    ABORT: menu not ready after 2 seconds")
+        return false
+    end
+    print("    Step0: menu ready, char slot=" .. char_before)
+
+    -- =====================================================
+    -- STEP 1: Navigate to command slot using Down.
+    -- Verify each Down press changes $0028 (cursor position).
+    -- NEVER press Up (triggers equipment info at slot 0).
+    -- =====================================================
+    local cmd_slot = find_command_slot(cmd_name)
+    print("    Step1: navigate to cmd slot " .. cmd_slot)
+
+    for i = 1, cmd_slot do
+        local ok, new_cursor = press_and_wait_for_change("Down", 0x0028, 20)
+        if ok then
+            print("    Step1: Down #" .. i .. " -> cursor=" .. new_cursor)
+        else
+            print("    Step1: Down #" .. i .. " FAILED (cursor stuck)")
+            -- Try pressing B and retrying
+            press_button("B", 6)
+            wait_frames(15)
+            return false
         end
     end
 
     -- =====================================================
-    -- STEP 2: Press A and VERIFY the menu changed.
-    -- $0026 should change when the submenu opens.
+    -- STEP 2: Press A to select command.
+    -- Verify by watching $0028 change (submenu cursor appears)
+    -- or $7BCA flickers.
     -- =====================================================
-    local ok_a, new_menu = press_and_wait_for_change("A", 0x0026, 45)
+    print("    Step2: selecting command with A")
+    local ok_a, new_val = press_and_wait_for_either("A", 0x0028, 0x7BCA, 45)
     if ok_a then
-        print("    Step2: A pressed, menu changed to " .. new_menu)
+        print("    Step2: command accepted (cursor/menu changed)")
     else
-        print("    WARN: A pressed but menu didn't change (still " .. new_menu .. ")")
-        -- Might already be in the right state, continue
+        print("    Step2: A might not have registered, continuing anyway")
     end
 
     -- =====================================================
-    -- STEP 3: Navigate submenu (if applicable)
+    -- STEP 3: Navigate submenu (MagiTek spell grid)
     -- =====================================================
     if cmd_name:lower() == "magitek" and spell_name then
-        -- We're in the MagiTek spell grid.
-        -- Navigate to the target spell and VERIFY cursor moves.
+        -- Wait briefly for submenu to fully render
+        wait_frames(10)
+
         local grid_pos = MAGITEK_GRID[spell_name]
         if grid_pos then
-            print("    Step3: navigate to " .. spell_name .. " (row=" .. grid_pos.row .. " col=" .. grid_pos.col .. ")")
+            print("    Step3: navigating to " .. spell_name ..
+                  " (row=" .. grid_pos.row .. " col=" .. grid_pos.col .. ")")
+
+            -- Navigate with verification
             navigate_grid_verified(grid_pos.row, grid_pos.col)
         end
 
-        -- Press A to select spell, verify menu changes
-        local ok_spell, new_menu2 = press_and_wait_for_change("A", 0x0026, 45)
+        -- Select the spell with A, verify something changes
+        print("    Step3: selecting spell with A")
+        local ok_spell = press_and_wait_for_either("A", 0x0028, 0x7BCA, 45)
         if ok_spell then
-            print("    Step3: spell selected, menu=" .. new_menu2)
+            print("    Step3: spell accepted")
         else
-            print("    WARN: spell A didn't change menu")
+            print("    Step3: spell A may not have registered")
         end
 
     elseif cmd_name:lower() == "fight" then
-        -- Fight goes straight to targeting (A already pressed above)
-        print("    Step3: Fight, direct to target")
+        print("    Step3: Fight -> direct to target")
 
     elseif cmd_name:lower() == "item" then
-        -- TODO: item submenu navigation
-        print("    Step3: Item (not yet implemented)")
+        print("    Step3: Item (TODO)")
         press_button("A", 6)
         wait_frames(20)
     end
 
     -- =====================================================
-    -- STEP 4: Target selection. Press A to confirm target.
-    -- For now, always select first target.
+    -- STEP 4: Confirm target.
+    -- Navigate to specific target if needed, then press A.
+    -- Verify turn was consumed: $7B80 should change.
     -- =====================================================
     if target_type == "ally" then
         for i = 1, target_slot do
@@ -418,9 +453,32 @@ function execute_battle_command(cmd_name, spell_name, target_type, target_slot)
         end
     end
 
-    print("    Step4: confirming target")
+    print("    Step4: confirming target with A")
     press_button("A", 6)
-    wait_frames(10)
+
+    -- Verify: wait for char slot to change (turn consumed)
+    -- or timeout after 90 frames (1.5 sec)
+    local turn_consumed = false
+    for f = 1, 90 do
+        emu.frameadvance()
+        frame_count = frame_count + 1
+        local char_now = mainmemory.read_u8(0x7B80)
+        if char_now ~= char_before then
+            turn_consumed = true
+            print("    Step4: TURN CONSUMED! char " .. char_before .. " -> " .. char_now)
+            break
+        end
+    end
+
+    if not turn_consumed then
+        print("    Step4: turn may not have consumed (char still " .. char_before .. ")")
+        -- Press B to back out and retry next cycle
+        press_button("B", 6)
+        wait_frames(10)
+        return false
+    end
+
+    return true
 end
 
 -----------------------------------------------------------------------
@@ -453,37 +511,33 @@ end
 function handle_battle()
     agent_state = "battle"
 
-    -- Cooldown between turn attempts
-    if battle_turn_timer > 0 then
-        battle_turn_timer = battle_turn_timer - 1
+    local enemies = mainmemory.read_u8(0x3A77)
+    local menu_open = mainmemory.read_u8(0x7BCA)
+    local menu_disabled = mainmemory.read_u8(0x628B)
+
+    -- If enemies are dead, this is the victory screen -- press A
+    if enemies == 0 then
+        press_button("A", 6)
+        wait_frames(5)
         return
     end
 
-    -- Stuck detection
-    local hp_hash = get_hp_hash()
-    if hp_hash == last_battle_hp then
-        battle_stuck_count = battle_stuck_count + 1
-        if battle_stuck_count > 5 then
-            print("  BATTLE: Stuck! Pressing B to escape submenu")
-            press_button("B", 6)
-            wait_frames(10)
-            press_button("B", 6)
-            battle_stuck_count = 0
-            battle_turn_timer = BATTLE_TURN_COOLDOWN
-            return
-        end
-    else
-        battle_stuck_count = 0
-        last_battle_hp = hp_hash
+    -- If menu not ready (animation playing or ATB not filled), wait
+    if menu_open == 0 or menu_disabled ~= 0 then
+        return
     end
 
-    -- Get action (from Python command or autonomous AI)
+    -- Menu is ready! Decide and execute a turn.
     local action = decide_battle_action()
+    local success = execute_battle_command(action.cmd, action.spell, action.target, action.slot)
 
-    -- Execute through the framework
-    execute_battle_command(action.cmd, action.spell, action.target, action.slot)
-
-    battle_turn_timer = BATTLE_TURN_COOLDOWN
+    if not success then
+        print("  BATTLE: Turn failed, pressing B to reset")
+        press_button("B", 6)
+        wait_frames(15)
+        press_button("B", 6)
+        wait_frames(15)
+    end
 end
 
 -----------------------------------------------------------------------
@@ -565,27 +619,44 @@ local was_in_battle = false
 
 function check_battle_transitions()
     local x = get_pos_x()
+    local enemies = mainmemory.read_u8(0x3A77)
     local current_in_battle = (x == 0)
 
-    if was_in_battle and not current_in_battle then
+    -- Detect battle victory: we were fighting, now enemies are dead
+    if was_in_battle and enemies == 0 and current_in_battle then
+        -- Still on battle screen but enemies are dead = victory!
         battles_won = battles_won + 1
-        battle_stuck_count = 0
-        battle_turn_timer = 0
-        last_battle_hp = ""
-        print("*** BATTLE WON #" .. battles_won .. " ***")
-        -- Press A to clear victory messages
-        for i = 1, 10 do
+        print("*** BATTLE WON #" .. battles_won .. " (enemies=0) ***")
+        -- Mash A to clear ALL victory messages (EXP, items, etc.)
+        for i = 1, 30 do
             press_button("A", 6)
-            wait_frames(10)
-            if get_pos_x() > 0 then break end
+            wait_frames(8)
+            -- Check if we're back on the field
+            if get_pos_x() > 0 then
+                print("  Back on field!")
+                break
+            end
         end
+        was_in_battle = false
+        in_battle = false
+        return
     end
 
-    if current_in_battle and not was_in_battle then
-        print("*** BATTLE START ***")
-        battle_turn_timer = 30
-        battle_stuck_count = 0
-        last_battle_hp = ""
+    -- Detect return to field (backup check)
+    if was_in_battle and not current_in_battle then
+        if not (enemies == 0) then
+            -- Escaped or something else
+            battles_won = battles_won + 1
+            print("*** BATTLE ENDED #" .. battles_won .. " ***")
+        end
+        was_in_battle = false
+        in_battle = false
+        return
+    end
+
+    -- Detect entering battle
+    if current_in_battle and not was_in_battle and enemies > 0 then
+        print("*** BATTLE START (enemies=" .. enemies .. ") ***")
     end
 
     was_in_battle = current_in_battle
