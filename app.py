@@ -15,6 +15,7 @@ from ff6_game_state import FF6GameStateReader
 from ff6_actions import FF6Actions
 from ai_expert import get_expert, reset_expert
 from ff6_agent import get_agent, reset_agent
+from ff6_ai_brain import FF6AIBrain
 
 app = Flask(__name__)
 
@@ -886,6 +887,36 @@ def agent_direction():
     direction = data.get('direction', 'Up')
     result = bizhawk_controller.set_walk_direction(direction)
     return jsonify({'success': True, 'message': f'Direction set to {direction}', 'response': result})
+
+# --- AI Brain Endpoints (LLM battle strategist) ---
+_brain = None
+
+@app.route('/brain/start', methods=['POST'])
+def brain_start():
+    """Start the AI Brain (LLM makes battle decisions, Lua executes)."""
+    global _brain, bizhawk_controller
+    if not bizhawk_controller or not bizhawk_controller.is_connected():
+        return jsonify({'success': False, 'message': 'Not connected'})
+    if _brain and _brain.running:
+        return jsonify({'success': False, 'message': 'Brain already running'})
+    _brain = FF6AIBrain(bizhawk_controller)
+    _brain.start()
+    return jsonify({'success': True, 'message': 'AI Brain started'})
+
+@app.route('/brain/stop', methods=['POST'])
+def brain_stop():
+    global _brain
+    if _brain and _brain.running:
+        _brain.stop()
+        return jsonify({'success': True, 'message': 'AI Brain stopped'})
+    return jsonify({'success': True, 'message': 'Brain not running'})
+
+@app.route('/brain/status', methods=['GET'])
+def brain_status():
+    global _brain
+    if _brain:
+        return jsonify({'success': True, **_brain.get_status()})
+    return jsonify({'success': True, 'running': False})
 
 # --- Expert AI Endpoints ---
 
