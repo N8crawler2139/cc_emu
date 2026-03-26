@@ -486,10 +486,11 @@ end
 -----------------------------------------------------------------------
 function decide_battle_action()
     -- Check if Python sent a specific command
+    -- Keep the pending command until it succeeds (don't clear on first read)
     if pending_battle_cmd then
-        local cmd = pending_battle_cmd
-        pending_battle_cmd = nil
-        return cmd
+        print("  Using Python command: " .. (pending_battle_cmd.cmd or "?") ..
+              " " .. (pending_battle_cmd.spell or "?"))
+        return pending_battle_cmd
     end
 
     -- Autonomous decision based on party state
@@ -531,7 +532,13 @@ function handle_battle()
     local action = decide_battle_action()
     local success = execute_battle_command(action.cmd, action.spell, action.target, action.slot)
 
-    if not success then
+    if success then
+        -- Turn consumed! Clear pending command if it was from Python
+        if pending_battle_cmd then
+            print("  Python command executed successfully!")
+            pending_battle_cmd = nil
+        end
+    else
         print("  BATTLE: Turn failed, pressing B to reset")
         press_button("B", 6)
         wait_frames(15)
